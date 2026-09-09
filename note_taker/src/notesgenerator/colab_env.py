@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 from notesgenerator._paths import default_data_root, is_colab, models_dir, runs_dir, scripts_dir
+from notesgenerator.colab_torch import ensure_torch_stack
 
 
 def configure_colab_env(
@@ -49,5 +50,6 @@ def configure_colab_env(
     print(f"  models/ → {models_dir()}")
     if is_colab():
         print("  (Colab detected — outputs go under /content/)")
+        ensure_torch_stack()
     sys.stdout.flush()
     return root

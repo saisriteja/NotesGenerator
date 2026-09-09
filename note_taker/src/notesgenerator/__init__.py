@@ -1,3 +1,3 @@
 """NotesGenerator — lecture video to markdown report pipeline."""
 
-__version__ = "0.1.3"
+__version__ = "0.1.4"

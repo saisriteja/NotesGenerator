@@ -80,6 +80,19 @@ class QwenVllmEngine:
         self._processor = None
 
     def load(self) -> None:
+        try:
+            from notesgenerator.colab_torch import ensure_torch_stack
+        except ImportError:
+            import sys
+            from pathlib import Path
+
+            root = Path(__file__).resolve().parents[1]
+            if str(root) not in sys.path:
+                sys.path.insert(0, str(root))
+            from colab_torch import ensure_torch_stack
+
+        ensure_torch_stack()
+
         import torch
         from transformers import AutoProcessor
         from vllm import LLM
