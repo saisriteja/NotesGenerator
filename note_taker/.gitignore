@@ -1,0 +1,9 @@
+dist/
+build/
+*.egg-info/
+models/
+runs/*
+!runs/.gitkeep
+__pycache__/
+*.pyc
+.ipynb_checkpoints/

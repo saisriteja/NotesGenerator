@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-ROOT = SCRIPT_DIR.parent
+ROOT = Path(os.environ.get("NOTE_TAKER_ROOT", Path.cwd()))
 
 
 @dataclass
@@ -98,11 +98,17 @@ def print_timing_table(run: PipelineRun) -> None:
 
 def build_env() -> dict:
     env = os.environ.copy()
-    env.setdefault("HF_HOME", "/workspace/teja/models/hub")
-    env.setdefault("HUGGINGFACE_HUB_CACHE", "/workspace/teja/models/hub")
-    env.setdefault("TORCH_HOME", "/workspace/torch-cache")
+    models = ROOT / "models"
+    env.setdefault("NOTE_TAKER_ROOT", str(ROOT))
+    env.setdefault("HF_HOME", str(models / "hub"))
+    env.setdefault("HUGGINGFACE_HUB_CACHE", str(models / "hub"))
+    env.setdefault("TORCH_HOME", str(models / "torch"))
     env.setdefault("QWEN_MODEL", "Qwen/Qwen3-VL-4B-Instruct")
     env.setdefault("VLLM_WORKER_MULTIPROC_METHOD", "spawn")
+    scripts = str(SCRIPT_DIR)
+    env["PYTHONPATH"] = (
+        scripts if "PYTHONPATH" not in env else f"{scripts}{os.pathsep}{env['PYTHONPATH']}"
+    )
     return env
 
 

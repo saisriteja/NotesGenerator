@@ -29,6 +29,7 @@ run_report_tail() {
     --section-tokens 6000 \
     --refine-passes 2 \
     --refine-tokens 4096 \
+    --verify-passes 2 \
     --gpu-mem 0.82
 }
 

@@ -1,3 +1,11 @@
 gpumode/
 lecture/
 runs/
+cv/
+
+# Python packaging
+note_taker/dist/
+note_taker/build/
+note_taker/*.egg-info/
+**/__pycache__/
+**/*.pyc

@@ -1,0 +1,59 @@
+[build-system]
+requires = ["hatchling >= 1.26"]
+build-backend = "hatchling.build"
+
+[project]
+name = "NotesGenerator"
+dynamic = ["version"]
+description = "Turn lecture videos into detailed markdown reports"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [
+  { name = "saisritejakuppaEros" },
+]
+keywords = ["lecture", "notes", "whisper", "video", "transcription", "vlm"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+  "Topic :: Multimedia :: Video",
+]
+dependencies = [
+  "yt-dlp>=2024.1.0",
+  "faster-whisper>=1.1.0",
+  "scenedetect[opencv]>=0.6.4",
+  "opencv-python>=4.8.0",
+  "pillow>=10.0.0",
+  "transformers>=4.57.0",
+  "accelerate>=0.27.0",
+  "sentencepiece>=0.2.0",
+  "protobuf>=4.25.0",
+  "qwen-vl-utils>=0.0.14",
+]
+
+[project.optional-dependencies]
+gpu = ["vllm>=0.11.0"]
+
+[project.scripts]
+notesgenerator = "notesgenerator.run_pipeline:main"
+
+[project.urls]
+Homepage = "https://github.com/saisritejakuppaEros/NotesGenerator"
+Repository = "https://github.com/saisritejakuppaEros/NotesGenerator"
+Issues = "https://github.com/saisritejakuppaEros/NotesGenerator/issues"
+
+[tool.hatch.version]
+path = "src/notesgenerator/__init__.py"
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "/src/notesgenerator/colab/note_taker.ipynb",
+]
