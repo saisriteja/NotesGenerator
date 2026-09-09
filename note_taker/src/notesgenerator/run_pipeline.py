@@ -62,6 +62,18 @@ def main() -> None:
         action="store_true",
         help="Skip ImageMagick compression steps",
     )
+    parser.add_argument(
+        "--max-model-len",
+        type=int,
+        default=None,
+        help="vLLM context for report step (default: auto — 8192 on T4, 16384 on A100+)",
+    )
+    parser.add_argument(
+        "--gpu-mem",
+        type=float,
+        default=None,
+        help="vLLM GPU memory fraction for report step (default: auto)",
+    )
     args = parser.parse_args()
 
     configure_colab_env(
@@ -129,6 +141,10 @@ def main() -> None:
         cmd.append("--force-all")
     if args.no_compress:
         cmd.append("--no-compress")
+    if args.max_model_len is not None:
+        cmd.extend(["--max-model-len", str(args.max_model_len)])
+    if args.gpu_mem is not None:
+        cmd.extend(["--gpu-mem", str(args.gpu_mem)])
 
     subprocess.run(cmd, check=True, cwd=str(data_root()), env=env)
 

@@ -204,6 +204,27 @@ After the pipeline finishes, a zip is created at `{data_root}/my_lecture_report.
 
 ---
 
+## GPU memory (T4 / Colab)
+
+Step 09 loads Qwen3-VL with a context window (`max_model_len`). On a **16 GB T4**, a 16k context needs ~2.25 GiB of KV cache that does not fit alongside the ~8.7 GiB model weights — vLLM fails with `ValueError: ... KV cache memory`.
+
+The pipeline **auto-detects** your GPU and picks safe defaults:
+
+| GPU class | `max_model_len` | `gpu_mem` |
+|-----------|-----------------|-----------|
+| T4 and other ≤16 GB / CC &lt; 8 | **8192** | **0.90** |
+| A100, L4, etc. (24 GB+, CC ≥ 8) | 16384 | 0.82 |
+
+You will see a line like `GPU 'Tesla T4' (14.6 GiB, CC 7.5) → report step uses max_model_len=8192` at startup.
+
+Override manually if needed:
+
+```bash
+notesgenerator --video lecture.mp4 --output run1 --max-model-len 8192 --gpu-mem 0.90
+```
+
+---
+
 ## Configuration cheat sheet
 
 ```bash
@@ -212,6 +233,9 @@ notesgenerator --video lecture.mp4 --output run1 --whisper-model large-v3
 
 # VLM batch size (step 05, GPU memory)
 notesgenerator --video lecture.mp4 --output run1 --vlm-batch-size 4
+
+# Report step vLLM settings (auto by default on T4)
+notesgenerator --video lecture.mp4 --output run1 --max-model-len 8192 --gpu-mem 0.90
 
 # Skip image compression
 notesgenerator --video lecture.mp4 --output run1 --no-compress

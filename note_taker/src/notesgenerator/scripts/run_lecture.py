@@ -22,6 +22,14 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parent
 ROOT = Path(os.environ.get("NOTE_TAKER_ROOT", Path.cwd()))
 
+try:
+    from notesgenerator.gpu_defaults import report_vllm_defaults
+except ImportError:
+    _pkg_root = SCRIPT_DIR.parent
+    if str(_pkg_root) not in sys.path:
+        sys.path.insert(0, str(_pkg_root))
+    from gpu_defaults import report_vllm_defaults  # type: ignore[import-untyped,no-redef]
+
 
 @dataclass
 class StepResult:
@@ -145,6 +153,18 @@ def main() -> None:
     parser.add_argument("--window-minutes", type=int, default=8)
     parser.add_argument("--refine-passes", type=int, default=2)
     parser.add_argument("--verify-passes", type=int, default=2)
+    parser.add_argument(
+        "--max-model-len",
+        type=int,
+        default=None,
+        help="vLLM context for report step (default: auto from GPU — 8192 on T4, 16384 on A100+)",
+    )
+    parser.add_argument(
+        "--gpu-mem",
+        type=float,
+        default=None,
+        help="vLLM gpu_memory_utilization for report step (default: auto — 0.90 on T4, 0.82 on larger GPUs)",
+    )
     parser.add_argument("--skip-prepare", action="store_true")
     parser.add_argument("--force-all", action="store_true", help="Force re-run all overwrite steps")
     parser.add_argument(
@@ -173,6 +193,10 @@ def main() -> None:
     run_dir = (args.run_root / args.output).resolve()
     run_dir.mkdir(parents=True, exist_ok=True)
 
+    auto_max_len, auto_gpu_mem = report_vllm_defaults()
+    report_max_model_len = args.max_model_len if args.max_model_len is not None else auto_max_len
+    report_gpu_mem = args.gpu_mem if args.gpu_mem is not None else auto_gpu_mem
+
     env = build_env()
     pipeline_started = datetime.now(timezone.utc).isoformat()
     t_pipeline = time.perf_counter()
@@ -191,6 +215,10 @@ def main() -> None:
     print(f"   Output: {run_dir}", flush=True)
     if not args.no_compress:
         print(f"   Compress: {args.compress_strategy} at end (step 10)", flush=True)
+    print(
+        f"   Report vLLM: max_model_len={report_max_model_len}, gpu_mem={report_gpu_mem}",
+        flush=True,
+    )
 
     rd = str(run_dir)
     force_flag = ["--force"] if args.force_all else []
@@ -256,14 +284,14 @@ def main() -> None:
                 [
                     "--run-dir", rd,
                     "--force-outline",
-                    "--max-model-len", "16384",
+                    "--max-model-len", str(report_max_model_len),
                     "--window-minutes", str(args.window_minutes),
                     "--section-tokens", "6000",
                     "--refine-passes", str(args.refine_passes),
                     "--refine-tokens", "4096",
                     "--verify-passes", str(args.verify_passes),
                     "--verify-tokens", "4096",
-                    "--gpu-mem", "0.82",
+                    "--gpu-mem", str(report_gpu_mem),
                 ],
             ),
             *(

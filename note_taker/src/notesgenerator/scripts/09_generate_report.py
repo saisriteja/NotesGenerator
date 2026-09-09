@@ -1653,7 +1653,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Detailed report with topic/time breakdown")
     add_run_dir_arg(parser)
     parser.add_argument("--model", default=None)
-    parser.add_argument("--max-model-len", type=int, default=16384)
+    parser.add_argument(
+        "--max-model-len",
+        type=int,
+        default=8192,
+        help="vLLM max context (8192 fits T4; use 16384 on 24GB+ GPUs)",
+    )
     parser.add_argument("--max-main-scenes", type=int, default=25)
     parser.add_argument(
         "--window-minutes",

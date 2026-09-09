@@ -29,3 +29,5 @@ notesgenerator --video lecture.mp4 --output my_lecture --data-dir /content
 notesgenerator --video lecture.mp4 --output my_lecture --no-zip
 notesgenerator --video lecture.mp4 --output my_lecture --no-compress
 ```
+
+Report step vLLM settings are **auto-detected** (8192 context on T4, 16384 on larger GPUs). Override with `--max-model-len` / `--gpu-mem` if needed.
