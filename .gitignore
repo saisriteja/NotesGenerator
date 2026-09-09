@@ -1,11 +1,19 @@
+# Local data / dev artifacts (not part of the package)
 gpumode/
 lecture/
 runs/
 cv/
+scripts/
 
-# Python packaging
-note_taker/dist/
-note_taker/build/
-note_taker/*.egg-info/
+# Python
 **/__pycache__/
 **/*.pyc
+*.egg-info/
+dist/
+build/
+
+# note_taker runtime caches
+note_taker/models/
+note_taker/runs/
+note_taker/dist/
+note_taker/build/
