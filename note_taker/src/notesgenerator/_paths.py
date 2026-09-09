@@ -13,12 +13,20 @@ def package_root() -> Path:
     return _PKG_ROOT
 
 
-def data_root() -> Path:
-    """Writable root for runs/, models/, and pipeline outputs."""
-    override = os.environ.get("NOTE_TAKER_ROOT")
-    if override:
+def is_colab() -> bool:
+    return bool(os.environ.get("COLAB_RELEASE_TAG")) or Path("/content").is_dir()
+
+
+def default_data_root() -> Path:
+    if override := os.environ.get("NOTE_TAKER_ROOT"):
         return Path(override)
+    if is_colab():
+        return Path("/content")
     return Path.cwd()
+
+
+def data_root() -> Path:
+    return default_data_root()
 
 
 def scripts_dir() -> Path:

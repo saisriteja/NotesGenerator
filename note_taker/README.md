@@ -1,36 +1,31 @@
 # NotesGenerator
 
-Lecture video → markdown report pipeline (GPU required).
+Lecture video → markdown report (GPU required).
 
-## Install
+## Colab
 
-```bash
-# From GitHub (until PyPI is live)
-pip install "NotesGenerator[gpu] @ git+https://github.com/saisritejakuppaEros/NotesGenerator.git#subdirectory=note_taker"
+```python
+!pip install -q "NotesGenerator[gpu] @ git+https://github.com/saisritejakuppaEros/NotesGenerator.git#subdirectory=note_taker"
+!apt-get install -y -qq ffmpeg imagemagick libsm6 libxext6 libgl1
 
-# From PyPI (after publish)
-pip install NotesGenerator[gpu]
+from notesgenerator.colab_env import configure_colab_env
+configure_colab_env()
+
+!notesgenerator --video "/content/lecture.mp4" --output my_lecture
 ```
 
-Colab also needs: `apt-get install -y ffmpeg libsm6 libxext6 libgl1`
+Outputs:
+- `/content/runs/my_lecture/report/report.md`
+- `/content/my_lecture_report.zip` (auto)
 
-## Run
+Progress prints appear live for each pipeline step. Images compressed with ImageMagick (palette PNG) after keyframe extraction and after report generation.
+
+## Options
 
 ```bash
 notesgenerator --video lecture.mp4 --output my_lecture
-notesgenerator --url "https://www.youtube.com/watch?v=VIDEO_ID" --output my_lecture
-```
-
-Output: `runs/<output>/report/report.md`
-
-## Colab notebook
-
-Open `src/notesgenerator/colab/note_taker.ipynb` or run the cells in the root README.
-
-## Dev
-
-```bash
-cd note_taker
-pip install -e ".[gpu]"
-python -m build
+notesgenerator --url "https://youtube.com/watch?v=ID" --output my_lecture
+notesgenerator --video lecture.mp4 --output my_lecture --data-dir /content
+notesgenerator --video lecture.mp4 --output my_lecture --no-zip
+notesgenerator --video lecture.mp4 --output my_lecture --no-compress
 ```

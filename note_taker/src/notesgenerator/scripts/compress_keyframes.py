@@ -139,7 +139,8 @@ def compress_images(
 
     print(
         f"Compressing {len(images)} image(s) in {run_dir.name} "
-        f"(strategy={strategy}, quality={quality}, min_scale={min_scale:.0%})"
+        f"(strategy={strategy}, quality={quality}, min_scale={min_scale:.0%})",
+        flush=True,
     )
 
     for src in images:
@@ -195,7 +196,8 @@ def compress_images(
         orig_w, orig_h = image_dimensions(dst if (in_place and not dry_run) else src)
         print(
             f"  {out_name}: {human_size(before)} -> {human_size(after)} "
-            f"({pct:.0f}% smaller, {orig_w}x{orig_h})"
+            f"({pct:.0f}% smaller, {orig_w}x{orig_h})",
+            flush=True,
         )
 
     saved = before_total - after_total
@@ -203,7 +205,8 @@ def compress_images(
     print(
         f"\nDone: {converted} images, "
         f"{human_size(before_total)} -> {human_size(after_total)} "
-        f"({saved_pct:.0f}% saved, {human_size(saved)} freed)"
+        f"({saved_pct:.0f}% saved, {human_size(saved)} freed)",
+        flush=True,
     )
 
 

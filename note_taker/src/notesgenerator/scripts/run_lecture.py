@@ -57,19 +57,19 @@ def fmt_duration(seconds: float) -> str:
 def run_step(name: str, script: str, args: list[str], env: dict) -> StepResult:
     started = datetime.now(timezone.utc).isoformat()
     t0 = time.perf_counter()
-    cmd = [sys.executable, str(SCRIPT_DIR / script), *args]
-    print(f"\n{'=' * 60}")
-    print(f"▶ {name}")
-    print(f"  {' '.join(cmd)}")
-    print(f"{'=' * 60}")
+    cmd = [sys.executable, "-u", str(SCRIPT_DIR / script), *args]
+    print(f"\n{'=' * 60}", flush=True)
+    print(f"▶ {name}", flush=True)
+    print(f"  {' '.join(cmd)}", flush=True)
+    print(f"{'=' * 60}", flush=True)
     try:
         subprocess.run(cmd, check=True, env=env, cwd=str(ROOT))
         elapsed = time.perf_counter() - t0
-        print(f"✓ {name} — {fmt_duration(elapsed)}")
+        print(f"✓ {name} — {fmt_duration(elapsed)}", flush=True)
         return StepResult(name, script, started, elapsed, "ok")
     except subprocess.CalledProcessError as exc:
         elapsed = time.perf_counter() - t0
-        print(f"✗ {name} failed (exit {exc.returncode}) — {fmt_duration(elapsed)}")
+        print(f"✗ {name} failed (exit {exc.returncode}) — {fmt_duration(elapsed)}", flush=True)
         return StepResult(
             name, script, started, elapsed, "failed", f"exit code {exc.returncode}"
         )
@@ -105,6 +105,7 @@ def build_env() -> dict:
     env.setdefault("TORCH_HOME", str(models / "torch"))
     env.setdefault("QWEN_MODEL", "Qwen/Qwen3-VL-4B-Instruct")
     env.setdefault("VLLM_WORKER_MULTIPROC_METHOD", "spawn")
+    env["PYTHONUNBUFFERED"] = "1"
     scripts = str(SCRIPT_DIR)
     env["PYTHONPATH"] = (
         scripts if "PYTHONPATH" not in env else f"{scripts}{os.pathsep}{env['PYTHONPATH']}"
@@ -146,6 +147,17 @@ def main() -> None:
     parser.add_argument("--verify-passes", type=int, default=2)
     parser.add_argument("--skip-prepare", action="store_true")
     parser.add_argument("--force-all", action="store_true", help="Force re-run all overwrite steps")
+    parser.add_argument(
+        "--no-compress",
+        action="store_true",
+        help="Skip ImageMagick compression of keyframes and report images",
+    )
+    parser.add_argument(
+        "--compress-strategy",
+        choices=["optimized-png", "palette", "jpeg", "webp"],
+        default="palette",
+        help="ImageMagick compression strategy (default: palette — good space savings)",
+    )
     args = parser.parse_args()
 
     video = args.video.resolve()
@@ -172,11 +184,13 @@ def main() -> None:
         started_at=pipeline_started,
     )
 
-    print(f"\n🎬 Lecture pipeline")
-    print(f"   Input:  {video}")
+    print(f"\n🎬 Lecture pipeline", flush=True)
+    print(f"   Input:  {video}", flush=True)
     if audio:
-        print(f"   Audio:  {audio}")
-    print(f"   Output: {run_dir}")
+        print(f"   Audio:  {audio}", flush=True)
+    print(f"   Output: {run_dir}", flush=True)
+    if not args.no_compress:
+        print(f"   Compress: {args.compress_strategy} (ImageMagick)", flush=True)
 
     rd = str(run_dir)
     force_flag = ["--force"] if args.force_all else []
@@ -217,6 +231,21 @@ def main() -> None:
                 "04_extract_keyframes.py",
                 ["--run-dir", rd],
             ),
+            *(
+                [
+                    (
+                        "04b Compress keyframes (ImageMagick)",
+                        "compress_keyframes.py",
+                        [
+                            "--run-dir", rd,
+                            "--strategy", args.compress_strategy,
+                            "--in-place",
+                        ],
+                    ),
+                ]
+                if not args.no_compress
+                else []
+            ),
             (
                 "05 VLM caption slides",
                 "05_caption_slides.py",
@@ -251,6 +280,23 @@ def main() -> None:
                     "--verify-tokens", "4096",
                     "--gpu-mem", "0.82",
                 ],
+            ),
+            *(
+                [
+                    (
+                        "10 Compress report images (ImageMagick)",
+                        "compress_keyframes.py",
+                        [
+                            "--run-dir", rd,
+                            "--report-only",
+                            "--attachments",
+                            "--strategy", args.compress_strategy,
+                            "--in-place",
+                        ],
+                    ),
+                ]
+                if not args.no_compress
+                else []
             ),
         ]
     )

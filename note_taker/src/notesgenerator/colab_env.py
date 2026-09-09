@@ -6,7 +6,7 @@ import os
 import sys
 from pathlib import Path
 
-from notesgenerator._paths import data_root, models_dir, runs_dir, scripts_dir
+from notesgenerator._paths import data_root, default_data_root, is_colab, models_dir, runs_dir, scripts_dir
 
 
 def configure_colab_env(
@@ -14,15 +14,15 @@ def configure_colab_env(
     offline: bool = False,
     model: str = "Qwen/Qwen3-VL-4B-Instruct",
     hf_token: str | None = None,
-    data_path: Path | None = None,
+    data_path: Path | str | None = None,
 ) -> Path:
     """Set env vars and ``sys.path`` for Colab / notebook use."""
-    root = data_path or data_root()
+    root = Path(data_path) if data_path else default_data_root()
     root.mkdir(parents=True, exist_ok=True)
+    os.environ["NOTE_TAKER_ROOT"] = str(root)
     runs_dir().mkdir(parents=True, exist_ok=True)
     (models_dir() / "hub").mkdir(parents=True, exist_ok=True)
-
-    os.environ["NOTE_TAKER_ROOT"] = str(root)
+    os.environ["PYTHONUNBUFFERED"] = "1"
     os.environ["HF_HOME"] = str(models_dir() / "hub")
     os.environ["HUGGINGFACE_HUB_CACHE"] = str(models_dir() / "hub")
     os.environ["TORCH_HOME"] = str(models_dir() / "torch")
@@ -44,4 +44,10 @@ def configure_colab_env(
     if scripts not in sys.path:
         sys.path.insert(0, scripts)
 
+    print(f"NotesGenerator data root: {root}")
+    print(f"  runs/   → {runs_dir()}")
+    print(f"  models/ → {models_dir()}")
+    if is_colab():
+        print("  (Colab detected — outputs go under /content/)")
+    sys.stdout.flush()
     return root
