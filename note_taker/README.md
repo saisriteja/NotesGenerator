@@ -6,7 +6,7 @@ Lecture video → markdown report pipeline (GPU required).
 
 ```bash
 # From GitHub (until PyPI is live)
-pip install "git+https://github.com/saisritejakuppaEros/NotesGenerator.git#subdirectory=note_taker[gpu]"
+pip install "NotesGenerator[gpu] @ git+https://github.com/saisritejakuppaEros/NotesGenerator.git#subdirectory=note_taker"
 
 # From PyPI (after publish)
 pip install NotesGenerator[gpu]

@@ -5,7 +5,7 @@ Turn lecture videos into markdown reports.
 ## Colab
 
 ```python
-!pip install "git+https://github.com/saisritejakuppaEros/NotesGenerator.git#subdirectory=note_taker[gpu]"
+!pip install "NotesGenerator[gpu] @ git+https://github.com/saisritejakuppaEros/NotesGenerator.git#subdirectory=note_taker"
 !apt-get install -y -qq ffmpeg libsm6 libxext6 libgl1
 
 from notesgenerator.colab_env import configure_colab_env
