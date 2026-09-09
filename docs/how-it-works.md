@@ -1,5 +1,7 @@
 # How NotesGenerator Works
 
+> **Web version:** [how-it-works.html](how-it-works.html) — formatted docs site for GitHub Pages.
+
 NotesGenerator turns a lecture video into a structured markdown report. This page walks through the end-to-end flow, the models involved, and what each folder under `runs/` contains.
 
 ## Quick overview

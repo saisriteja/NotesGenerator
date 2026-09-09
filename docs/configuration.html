@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Configuration — NotesGenerator</title>
+  <meta name="description" content="CLI options, environment variables, and GPU memory tuning for NotesGenerator.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="assets/css/style.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="index.html">
+      <span class="brand-icon">N</span>
+      NotesGenerator
+    </a>
+    <div class="header-links">
+      <a href="https://github.com/saisritejakuppaEros/NotesGenerator" target="_blank" rel="noopener">GitHub</a>
+      <a href="https://colab.research.google.com/drive/1qqzgnirnHFXrWATLAeHg4-73V3NpGCzo?usp=sharing" target="_blank" rel="noopener">Colab</a>
+      <button class="menu-toggle" aria-label="Toggle menu">☰</button>
+    </div>
+  </header>
+
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="sidebar-section">
+        <div class="sidebar-label">Documentation</div>
+        <nav>
+          <a href="index.html">Overview</a>
+          <a href="quickstart.html">Quickstart</a>
+          <a href="how-it-works.html">How it works</a>
+          <a href="configuration.html">Configuration</a>
+          <a href="examples.html">Examples</a>
+        </nav>
+      </div>
+      <div class="sidebar-section">
+        <div class="sidebar-label">On this page</div>
+        <nav>
+          <a href="#cli">CLI flags</a>
+          <a href="#env">Environment</a>
+          <a href="#gpu-memory">GPU memory</a>
+          <a href="#cheatsheet">Cheat sheet</a>
+        </nav>
+      </div>
+    </aside>
+
+    <main class="content">
+      <h1>Configuration</h1>
+      <p class="lead">CLI flags, environment variables, and GPU defaults for running NotesGenerator on Colab T4 or larger GPUs.</p>
+
+      <h2 id="cli">CLI flags</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Flag</th>
+              <th>Default</th>
+              <th>Description</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>--video PATH</code></td>
+              <td>—</td>
+              <td>Local lecture video (<code>.mp4</code>)</td>
+            </tr>
+            <tr>
+              <td><code>--url URL</code></td>
+              <td>—</td>
+              <td>YouTube URL (downloads via yt-dlp)</td>
+            </tr>
+            <tr>
+              <td><code>--output NAME</code></td>
+              <td>required</td>
+              <td>Run folder name under <code>runs/</code></td>
+            </tr>
+            <tr>
+              <td><code>--data-dir PATH</code></td>
+              <td>cwd / <code>/content</code></td>
+              <td>Root for runs and model caches</td>
+            </tr>
+            <tr>
+              <td><code>--whisper-model SIZE</code></td>
+              <td><code>medium</code></td>
+              <td>Whisper model size (<code>large-v3</code>, etc.)</td>
+            </tr>
+            <tr>
+              <td><code>--vlm-batch-size N</code></td>
+              <td>auto</td>
+              <td>Batch size for step 05 slide captioning</td>
+            </tr>
+            <tr>
+              <td><code>--max-model-len N</code></td>
+              <td>auto</td>
+              <td>vLLM context window for report step</td>
+            </tr>
+            <tr>
+              <td><code>--gpu-mem FRACTION</code></td>
+              <td>auto</td>
+              <td>GPU memory fraction for vLLM</td>
+            </tr>
+            <tr>
+              <td><code>--no-zip</code></td>
+              <td>off</td>
+              <td>Skip zip archive creation</td>
+            </tr>
+            <tr>
+              <td><code>--no-compress</code></td>
+              <td>off</td>
+              <td>Skip ImageMagick PNG compression</td>
+            </tr>
+            <tr>
+              <td><code>--force-all</code></td>
+              <td>off</td>
+              <td>Re-run all cached pipeline steps</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2 id="env">Environment variables</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Variable</th>
+              <th>Description</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>QWEN_MODEL</code></td>
+              <td>Override default <code>Qwen/Qwen3-VL-4B-Instruct</code></td>
+            </tr>
+            <tr>
+              <td><code>NOTE_TAKER_ROOT</code></td>
+              <td>Same as <code>--data-dir</code> — root for runs and caches</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2 id="gpu-memory">GPU memory (T4 / Colab)</h2>
+      <p>
+        Step 09 loads Qwen3-VL with a context window (<code>max_model_len</code>). On a <strong>16 GB T4</strong>,
+        a 16k context needs ~2.25 GiB of KV cache that does not fit alongside ~8.7 GiB model weights —
+        vLLM fails with a KV cache memory error.
+      </p>
+      <p>The pipeline <strong>auto-detects</strong> your GPU and picks safe defaults:</p>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>GPU class</th>
+              <th><code>max_model_len</code></th>
+              <th><code>gpu_mem</code></th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>T4 and other ≤16 GB / CC &lt; 8</td>
+              <td><strong>8192</strong></td>
+              <td><strong>0.90</strong></td>
+            </tr>
+            <tr>
+              <td>A100, L4, etc. (24 GB+, CC ≥ 8)</td>
+              <td>16384</td>
+              <td>0.82</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>At startup you will see a line like:</p>
+      <pre><code>GPU 'Tesla T4' (14.6 GiB, CC 7.5) → report step uses max_model_len=8192</code></pre>
+
+      <h2 id="cheatsheet">Configuration cheat sheet</h2>
+
+      <span class="code-label">Whisper size</span>
+      <pre><code>notesgenerator --video lecture.mp4 --output run1 --whisper-model large-v3</code></pre>
+
+      <span class="code-label">VLM batch size (step 05)</span>
+      <pre><code>notesgenerator --video lecture.mp4 --output run1 --vlm-batch-size 4</code></pre>
+
+      <span class="code-label">Manual vLLM settings (T4)</span>
+      <pre><code>notesgenerator --video lecture.mp4 --output run1 --max-model-len 8192 --gpu-mem 0.90</code></pre>
+
+      <span class="code-label">Skip compression</span>
+      <pre><code>notesgenerator --video lecture.mp4 --output run1 --no-compress</code></pre>
+
+      <span class="code-label">Force re-run</span>
+      <pre><code>notesgenerator --video lecture.mp4 --output run1 --force-all</code></pre>
+
+      <span class="code-label">Custom Qwen model</span>
+      <pre><code>QWEN_MODEL=Qwen/Qwen3-VL-8B-Instruct notesgenerator --video lecture.mp4 --output run1</code></pre>
+
+      <span class="code-label">Colab</span>
+      <pre><code>from notesgenerator.colab_env import configure_colab_env
+configure_colab_env()  # paths, torch fixes, cache → /content/models/</code></pre>
+
+      <footer class="page-footer">
+        <p>Next: <a href="examples.html">Examples</a> — sample report structure</p>
+      </footer>
+    </main>
+  </div>
+
+  <script src="assets/js/main.js"></script>
+</body>
+</html>

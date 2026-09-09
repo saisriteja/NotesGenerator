@@ -2,7 +2,15 @@
 
 Turn lecture videos into markdown reports.
 
-See [docs/how-it-works.md](docs/how-it-works.md) for a flowchart of the pipeline, models used, and folder layout.
+**Documentation:** [docs/](docs/index.html) — static site for [GitHub Pages](https://docs.github.com/en/pages/getting-started-with-github-pages/configuring-a-publishing-source-for-your-github-pages-site#publishing-from-a-branch) (Settings → Pages → branch `main`, folder `/docs`).
+
+| Page | Description |
+|------|-------------|
+| [Overview](docs/index.html) | Features, models, quick example |
+| [Quickstart](docs/quickstart.html) | Colab + local install |
+| [How it works](docs/how-it-works.html) | Pipeline flowcharts & folder layout |
+| [Configuration](docs/configuration.html) | CLI flags & GPU tuning |
+| [Examples](docs/examples.html) | Sample report structure |
 
 ## Colab
 

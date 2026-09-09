@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Examples — NotesGenerator</title>
+  <meta name="description" content="Sample NotesGenerator report output structure and example lectures processed.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="assets/css/style.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="index.html">
+      <span class="brand-icon">N</span>
+      NotesGenerator
+    </a>
+    <div class="header-links">
+      <a href="https://github.com/saisritejakuppaEros/NotesGenerator" target="_blank" rel="noopener">GitHub</a>
+      <a href="https://colab.research.google.com/drive/1qqzgnirnHFXrWATLAeHg4-73V3NpGCzo?usp=sharing" target="_blank" rel="noopener">Colab</a>
+      <button class="menu-toggle" aria-label="Toggle menu">☰</button>
+    </div>
+  </header>
+
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="sidebar-section">
+        <div class="sidebar-label">Documentation</div>
+        <nav>
+          <a href="index.html">Overview</a>
+          <a href="quickstart.html">Quickstart</a>
+          <a href="how-it-works.html">How it works</a>
+          <a href="configuration.html">Configuration</a>
+          <a href="examples.html">Examples</a>
+        </nav>
+      </div>
+    </aside>
+
+    <main class="content">
+      <h1>Examples</h1>
+      <p class="lead">
+        What a NotesGenerator report looks like — topic timeline, slide figures, equations, and per-topic breakdowns.
+      </p>
+
+      <h2>Sample lectures processed</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Run name</th>
+              <th>Topic</th>
+              <th>Report</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>gpumode_lecture_80_how_flashattention_4_works</code></td>
+              <td>Flash Attention 4, Blackwell, softmax optimization</td>
+              <td><a href="https://github.com/saisritejakuppaEros/NotesGenerator/blob/main/runs/gpumode_lecture_80_how_flashattention_4_works/report/report.md" target="_blank" rel="noopener">View on GitHub</a></td>
+            </tr>
+            <tr>
+              <td><code>cv_3x3_image_transformations_image_stitching</code></td>
+              <td>Computer vision — image transforms &amp; stitching</td>
+              <td><a href="https://github.com/saisritejakuppaEros/NotesGenerator/blob/main/runs/cv_3x3_image_transformations_image_stitching/report/report.md" target="_blank" rel="noopener">View on GitHub</a></td>
+            </tr>
+            <tr>
+              <td><code>gpumode_lecture_50_a_learning_journey_cuda_triton_flash_attention</code></td>
+              <td>CUDA, Triton, Flash Attention journey</td>
+              <td><a href="https://github.com/saisritejakuppaEros/NotesGenerator/blob/main/runs/gpumode_lecture_50_a_learning_journey_cuda_triton_flash_attention/report/report.md" target="_blank" rel="noopener">View on GitHub</a></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2>Report structure</h2>
+      <p>Every <code>report/report.md</code> follows a consistent layout:</p>
+
+      <h3>1. Title &amp; session timeline</h3>
+      <pre><code># NVIDIA Blackwell Architecture and Flash Attention Innovations
+_Exploring hardware advancements and attention mechanism optimizations_
+
+## Complete Session Timeline
+
+| Time | Topic | Sub-segments | Summary |
+|------|-------|--------------|---------|
+| 00:00–05:00 | **Introduction to NVIDIA Blackwell** | … | … |
+| 14:27–24:33 | **Flash Attention: Evolution** | … | … |</code></pre>
+
+      <h3>2. Topic index</h3>
+      <pre><code>## Topic Index (with time breakdown)
+
+### Topic 1: Introduction to NVIDIA Blackwell Architecture (00:00–05:00)
+- **00:00–05:00** — Introduction to NVIDIA Blackwell Architecture: …
+
+### Topic 2: Flash Attention: Evolution and Optimization (14:27–24:33)
+- **14:27–22:16** — Flash Attention 1: Core Concepts …</code></pre>
+
+      <h3>3. Detailed breakdown with slides</h3>
+      <pre><code>## Topic 1: Introduction to NVIDIA Blackwell Architecture
+> ⏱ Session: 00:00–05:00
+
+### 00:00 — Introduction to NVIDIA Blackwell Architecture
+
+![image](attachments/scene_001.png)
+
+---
+
+## What is covered:
+The segment introduces the NVIDIA Blackwell architecture…
+
+## Key points:
+- NVIDIA Blackwell architecture is introduced as a major advancement…
+
+## Equations &amp; definitions:
+$$ \text{Attention}(Q,K,V) = \text{softmax}\left(\frac{QK^T}{\sqrt{d_k}}\right)V $$</code></pre>
+
+      <h2>What's included in the zip</h2>
+      <pre><code>my_lecture_report.zip
+└── report/
+    ├── report.md              # main document
+    ├── mindmap.md             # concept map
+    ├── topic_outline.json     # structured outline
+    ├── topics/
+    │   ├── topic_01.md
+    │   └── topic_02.md
+    └── attachments/
+        ├── scene_001.png      # slide keyframes
+        └── scene_002.png</code></pre>
+
+      <div class="callout">
+        <strong>Try it yourself:</strong> Open the
+        <a href="https://colab.research.google.com/drive/1qqzgnirnHFXrWATLAeHg4-73V3NpGCzo?usp=sharing" target="_blank" rel="noopener">Colab notebook</a>,
+        upload a lecture, and compare your output to the samples above.
+      </div>
+
+      <h2>Pipeline timing</h2>
+      <p>Each run also writes <code>pipeline_timing.json</code> with per-step durations — useful for profiling on different GPUs:</p>
+      <pre><code>{
+  "02_transcribe": 142.3,
+  "05_caption_slides": 89.1,
+  "09_generate_report": 312.7,
+  ...
+}</code></pre>
+
+      <footer class="page-footer">
+        <p>
+          <a href="quickstart.html">Get started</a> ·
+          <a href="https://github.com/saisritejakuppaEros/NotesGenerator">View source on GitHub</a>
+        </p>
+      </footer>
+    </main>
+  </div>
+
+  <script src="assets/js/main.js"></script>
+</body>
+</html>

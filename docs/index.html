@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NotesGenerator — Lecture videos to markdown reports</title>
+  <meta name="description" content="Turn lecture videos into structured markdown reports with Whisper, Qwen3-VL, and vLLM.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="assets/css/style.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="index.html">
+      <span class="brand-icon">N</span>
+      NotesGenerator
+    </a>
+    <div class="header-links">
+      <a href="https://github.com/saisritejakuppaEros/NotesGenerator" target="_blank" rel="noopener">GitHub</a>
+      <a href="https://colab.research.google.com/drive/1qqzgnirnHFXrWATLAeHg4-73V3NpGCzo?usp=sharing" target="_blank" rel="noopener">Colab</a>
+      <button class="menu-toggle" aria-label="Toggle menu">☰</button>
+    </div>
+  </header>
+
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="sidebar-section">
+        <div class="sidebar-label">Documentation</div>
+        <nav>
+          <a href="index.html">Overview</a>
+          <a href="quickstart.html">Quickstart</a>
+          <a href="how-it-works.html">How it works</a>
+          <a href="configuration.html">Configuration</a>
+          <a href="examples.html">Examples</a>
+        </nav>
+      </div>
+    </aside>
+
+    <main class="content">
+      <section class="hero">
+        <div class="hero-badges">
+          <span class="badge">GPU pipeline</span>
+          <span class="badge badge-muted">Whisper + Qwen3-VL</span>
+          <span class="badge badge-muted">vLLM</span>
+        </div>
+
+        <h1>Turn lecture videos into markdown reports</h1>
+        <p class="lead">
+          NotesGenerator downloads or ingests a lecture video, transcribes speech, detects slide scenes,
+          captions keyframes with a vision-language model, and writes a structured report with equations,
+          diagrams, and a topic timeline.
+        </p>
+
+        <div class="cta-row">
+          <a class="btn btn-primary" href="quickstart.html">Get started</a>
+          <a class="btn" href="how-it-works.html">See the pipeline</a>
+          <a class="btn" href="https://colab.research.google.com/drive/1qqzgnirnHFXrWATLAeHg4-73V3NpGCzo?usp=sharing" target="_blank" rel="noopener">Open in Colab</a>
+        </div>
+      </section>
+
+      <h2>Key features</h2>
+      <div class="feature-grid">
+        <div class="feature-card">
+          <h3>End-to-end automation</h3>
+          <p>One CLI command from YouTube URL or local <code>.mp4</code> to <code>report.md</code> plus a downloadable zip.</p>
+        </div>
+        <div class="feature-card">
+          <h3>Slide-aware vision</h3>
+          <p>Scene detection and Qwen3-VL captioning extract equations, diagrams, and summaries from each keyframe.</p>
+        </div>
+        <div class="feature-card">
+          <h3>Structured reports</h3>
+          <p>Topic outline, per-topic sections, mind map, coverage audit, and TeX math — not just a raw transcript dump.</p>
+        </div>
+        <div class="feature-card">
+          <h3>Colab-ready</h3>
+          <p>vLLM runs in-process (no separate server). GPU memory defaults auto-tune for T4 vs A100.</p>
+        </div>
+      </div>
+
+      <h2>Quick example</h2>
+      <span class="code-label">CLI</span>
+      <pre><code>notesgenerator --video lecture.mp4 --output my_lecture
+# → runs/my_lecture/report/report.md
+# → my_lecture_report.zip</code></pre>
+
+      <span class="code-label">YouTube</span>
+      <pre><code>notesgenerator --url "https://youtube.com/watch?v=..." --output my_lecture</code></pre>
+
+      <div class="callout">
+        <strong>Output:</strong> A markdown report with slide attachments, topic index, session timeline,
+        and per-topic breakdowns. See <a href="examples.html">Examples</a> for sample output structure.
+      </div>
+
+      <h2>Supported tasks</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Input</th>
+              <th>Pipeline</th>
+              <th>Output</th>
+              <th>GPU</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Local <code>.mp4</code></td>
+              <td>Transcribe → scenes → VLM → report</td>
+              <td><code>report/report.md</code></td>
+              <td>Recommended</td>
+            </tr>
+            <tr>
+              <td>YouTube URL</td>
+              <td>Download + same pipeline</td>
+              <td><code>report/report.md</code> + zip</td>
+              <td>Recommended</td>
+            </tr>
+            <tr>
+              <td>Google Colab</td>
+              <td><code>configure_colab_env()</code> + CLI</td>
+              <td><code>/content/runs/…</code></td>
+              <td>Required</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2>Models at a glance</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Step</th>
+              <th>Model / tool</th>
+              <th>Role</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Transcription</td>
+              <td>faster-whisper (<code>medium</code>)</td>
+              <td>Timestamped speech segments</td>
+            </tr>
+            <tr>
+              <td>Scene detection</td>
+              <td>PySceneDetect</td>
+              <td>Slide change boundaries</td>
+            </tr>
+            <tr>
+              <td>Caption + report</td>
+              <td>Qwen3-VL-4B via vLLM</td>
+              <td>Slide captions and report writing</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <footer class="page-footer">
+        <p>
+          <a href="https://github.com/saisritejakuppaEros/NotesGenerator">NotesGenerator on GitHub</a>
+          · MIT License · Built for lecture note-taking at scale
+        </p>
+      </footer>
+    </main>
+  </div>
+
+  <script src="assets/js/main.js"></script>
+</body>
+</html>
