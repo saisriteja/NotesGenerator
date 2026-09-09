@@ -53,7 +53,10 @@ Issues = "https://github.com/saisritejakuppaEros/NotesGenerator/issues"
 [tool.hatch.version]
 path = "src/notesgenerator/__init__.py"
 
+[tool.hatch.build.targets.wheel]
+packages = ["src/notesgenerator"]
+
 [tool.hatch.build.targets.sdist]
 include = [
-  "/src/notesgenerator/colab/note_taker.ipynb",
+  "/src/notesgenerator",
 ]
