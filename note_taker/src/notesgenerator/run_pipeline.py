@@ -18,16 +18,6 @@ def _log(msg: str) -> None:
     print(msg, flush=True)
 
 
-def _check_imagemagick() -> None:
-    if shutil.which("convert") is None:
-        _log(
-            "WARNING: ImageMagick not found (needed for image compression).\n"
-            "  Install with: apt-get install -y imagemagick"
-        )
-    else:
-        _log("ImageMagick: OK (convert found)")
-
-
 def _zip_report(run_dir: Path, output_name: str) -> Path:
     report_dir = run_dir / "report"
     if not report_dir.is_dir():
@@ -94,7 +84,7 @@ def main() -> None:
         _log(f"URL:    {args.url}")
     _log(f"Output: {run_dir}")
     _log(f"Data:   {data_root()}")
-    _check_imagemagick()
+    _log("Image compression runs at the end (step 10).")
     _log("=" * 60)
 
     if args.url:

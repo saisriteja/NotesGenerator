@@ -6,7 +6,7 @@ import os
 import sys
 from pathlib import Path
 
-from notesgenerator._paths import data_root, default_data_root, is_colab, models_dir, runs_dir, scripts_dir
+from notesgenerator._paths import default_data_root, is_colab, models_dir, runs_dir, scripts_dir
 
 
 def configure_colab_env(

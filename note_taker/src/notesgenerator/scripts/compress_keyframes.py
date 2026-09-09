@@ -15,23 +15,21 @@ from __future__ import annotations
 import argparse
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
+# Allow running as script from scripts/ dir
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from imagemagick_util import available, convert, ensure_installed, identify_size
 from common import add_run_dir_arg, die
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp"}
 
 
 def image_dimensions(path: Path) -> tuple[int, int]:
-    result = subprocess.run(
-        ["identify", "-format", "%w %h", str(path)],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    w, h = result.stdout.strip().split()
-    return int(w), int(h)
+    return identify_size(path)
 
 
 def compress_with_imagemagick(
@@ -46,18 +44,17 @@ def compress_with_imagemagick(
     min_w = max(1, int(orig_w * min_scale))
     min_h = max(1, int(orig_h * min_scale))
 
-    cmd = ["convert", str(src), "-strip"]
+    extra = ["-strip"]
     if strategy == "optimized-png":
-        cmd.extend(["-define", "png:compression-level=9"])
+        extra.extend(["-define", "png:compression-level=9"])
     elif strategy == "palette":
-        cmd.extend(["-colors", "256", "-define", "png:compression-level=9"])
+        extra.extend(["-colors", "256", "-define", "png:compression-level=9"])
     elif strategy in {"jpeg", "webp"}:
-        cmd.extend(["-quality", str(quality)])
+        extra.extend(["-quality", str(quality)])
     else:
         die(f"Unknown strategy: {strategy}")
-    cmd.append(str(dst))
 
-    subprocess.run(cmd, check=True, capture_output=True)
+    convert(src, dst, extra)
 
     out_w, out_h = image_dimensions(dst)
     if out_w < min_w or out_h < min_h:
@@ -71,6 +68,7 @@ def collect_images(
     run_dir: Path,
     *,
     include_attachments: bool,
+    include_report: bool,
     report_only: bool,
 ) -> list[Path]:
     paths: list[Path] = []
@@ -86,6 +84,13 @@ def collect_images(
     keyframes = run_dir / "scenes" / "keyframes"
     if keyframes.is_dir():
         paths.extend(sorted(p for p in keyframes.iterdir() if p.suffix.lower() in IMAGE_EXTS))
+
+    if include_report:
+        report_attachments = run_dir / "report" / "attachments"
+        if report_attachments.is_dir():
+            paths.extend(
+                sorted(p for p in report_attachments.iterdir() if p.suffix.lower() in IMAGE_EXTS)
+            )
 
     if include_attachments:
         attachments = run_dir / "attachments"
@@ -120,12 +125,14 @@ def compress_images(
     min_scale: float,
     in_place: bool,
     include_attachments: bool,
+    include_report: bool,
     report_only: bool,
     dry_run: bool,
 ) -> None:
     images = collect_images(
         run_dir,
         include_attachments=include_attachments,
+        include_report=include_report,
         report_only=report_only,
     )
     if not images:
@@ -242,6 +249,11 @@ def main() -> None:
         help="Also compress run attachments/",
     )
     parser.add_argument(
+        "--include-report",
+        action="store_true",
+        help="Also compress report/attachments/ (used by end-of-pipeline step)",
+    )
+    parser.add_argument(
         "--report-only",
         action="store_true",
         help="Compress only report/attachments/ (for download bundles)",
@@ -256,6 +268,10 @@ def main() -> None:
     if args.min_scale <= 0 or args.min_scale > 1:
         die("--min-scale must be in (0, 1]")
 
+    if not ensure_installed():
+        print("Skipping compression (ImageMagick not available).", flush=True)
+        return
+
     compress_images(
         args.run_dir,
         strategy=args.strategy,
@@ -263,6 +279,7 @@ def main() -> None:
         min_scale=args.min_scale,
         in_place=args.in_place or args.strategy in {"optimized-png", "palette"},
         include_attachments=args.attachments,
+        include_report=args.include_report,
         report_only=args.report_only,
         dry_run=args.dry_run,
     )

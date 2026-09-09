@@ -190,7 +190,7 @@ def main() -> None:
         print(f"   Audio:  {audio}", flush=True)
     print(f"   Output: {run_dir}", flush=True)
     if not args.no_compress:
-        print(f"   Compress: {args.compress_strategy} (ImageMagick)", flush=True)
+        print(f"   Compress: {args.compress_strategy} at end (step 10)", flush=True)
 
     rd = str(run_dir)
     force_flag = ["--force"] if args.force_all else []
@@ -231,21 +231,6 @@ def main() -> None:
                 "04_extract_keyframes.py",
                 ["--run-dir", rd],
             ),
-            *(
-                [
-                    (
-                        "04b Compress keyframes (ImageMagick)",
-                        "compress_keyframes.py",
-                        [
-                            "--run-dir", rd,
-                            "--strategy", args.compress_strategy,
-                            "--in-place",
-                        ],
-                    ),
-                ]
-                if not args.no_compress
-                else []
-            ),
             (
                 "05 VLM caption slides",
                 "05_caption_slides.py",
@@ -284,11 +269,11 @@ def main() -> None:
             *(
                 [
                     (
-                        "10 Compress report images (ImageMagick)",
+                        "10 Compress all images (ImageMagick)",
                         "compress_keyframes.py",
                         [
                             "--run-dir", rd,
-                            "--report-only",
+                            "--include-report",
                             "--attachments",
                             "--strategy", args.compress_strategy,
                             "--in-place",
