@@ -74,6 +74,19 @@ def main() -> None:
         default=None,
         help="vLLM GPU memory fraction for report step (default: auto)",
     )
+    parser.add_argument(
+        "--papers",
+        nargs="*",
+        type=Path,
+        default=None,
+        help="Optional research PDF paths (parsed with docling before transcription)",
+    )
+    parser.add_argument(
+        "--keyframe-strategy",
+        choices=["last", "midpoint"],
+        default="last",
+        help="Keyframe selection per scene (default: last)",
+    )
     args = parser.parse_args()
 
     configure_colab_env(
@@ -145,6 +158,9 @@ def main() -> None:
         cmd.extend(["--max-model-len", str(args.max_model_len)])
     if args.gpu_mem is not None:
         cmd.extend(["--gpu-mem", str(args.gpu_mem)])
+    if args.papers:
+        cmd.extend(["--papers", *[str(p.resolve()) for p in args.papers]])
+    cmd.extend(["--keyframe-strategy", args.keyframe_strategy])
 
     subprocess.run(cmd, check=True, cwd=str(data_root()), env=env)
 

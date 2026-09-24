@@ -75,7 +75,15 @@
         </div>
         <div class="feature-card">
           <h3>Colab-ready</h3>
-          <p>vLLM runs in-process (no separate server). GPU memory defaults auto-tune for T4 vs A100.</p>
+          <p>vLLM runs in-process (no separate server). GPU memory defaults auto-tune for T4 vs A100 and clamp on shared GPUs.</p>
+        </div>
+        <div class="feature-card">
+          <h3>Research paper grounding</h3>
+          <p>Pass <code>--papers</code> PDFs to parse with docling and inject citations and context into teaching-level report sections.</p>
+        </div>
+        <div class="feature-card">
+          <h3>Single VLM session</h3>
+          <p>Slide captioning and report writing share one Qwen3-VL load — faster cold start and less VRAM churn on Colab.</p>
         </div>
       </div>
 

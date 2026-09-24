@@ -72,14 +72,16 @@ files.download("/content/my_lecture_report.zip")</code></pre>
       <h2>Local install</h2>
       <p>Requires Python 3.10+, CUDA GPU, <code>ffmpeg</code>, and ImageMagick.</p>
 
+      <span class="code-label">From PyPI</span>
+      <pre><code>pip install "NotesGenerator[gpu]"
+pip install "NotesGenerator[gpu,papers]"   # optional PDF grounding</code></pre>
+
       <span class="code-label">From GitHub</span>
       <pre><code>pip install "NotesGenerator[gpu] @ git+https://github.com/saisritejakuppaEros/NotesGenerator.git#subdirectory=note_taker"</code></pre>
 
       <span class="code-label">Run</span>
-      <pre><code>notesgenerator --video lecture.mp4 --output my_lecture</code></pre>
-
-      <p>After PyPI publish:</p>
-      <pre><code>pip install "NotesGenerator[gpu]"</code></pre>
+      <pre><code>notesgenerator --video lecture.mp4 --output my_lecture
+notesgenerator --video lecture.mp4 --output my_lecture --papers paper1.pdf paper2.pdf</code></pre>
 
       <h2>CLI usage</h2>
       <div class="table-wrap">

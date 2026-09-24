@@ -37,4 +37,11 @@ from google.colab import files
 files.download("/content/my_lecture_report.zip")
 ```
 
-After PyPI publish: `pip install NotesGenerator[gpu]`
+Install from PyPI:
+
+```bash
+pip install "NotesGenerator[gpu]"              # core + vLLM
+pip install "NotesGenerator[gpu,papers]"         # + docling PDF grounding
+```
+
+**v0.1.5 highlights:** single VLM load, optional `--papers` PDF grounding, last-frame keyframes, teaching-level reports, shared-GPU VRAM auto-clamp. See [Configuration](docs/configuration.html) for all CLI flags.

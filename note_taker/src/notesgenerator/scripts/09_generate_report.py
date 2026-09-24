@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from common import add_run_dir_arg, load_json, save_json
-from qwen_vllm import DEFAULT_MODEL, VllmConfig, qwen_vllm_session, text_messages
+from qwen_vllm import DEFAULT_MODEL, QwenVllmEngine, VllmConfig, qwen_vllm_session, text_messages
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -34,6 +34,19 @@ KEEP_KEYWORDS = re.compile(
     r"algorithm|framework|theorem|paper|arxiv|benchmark|plot|chart|"
     r"table|workflow|agent|model)\b",
     re.I,
+)
+JUNK_SEGMENT_TITLE = re.compile(
+    r"\b("
+    r"no equations?(?:\s+on\s+slide|\s+or\s+diagrams?|\s+present|\s+or\s+latex)?|"
+    r"no visible(?:\s+equations?)?|slide with no visuals?|no diagrams?|"
+    r"discussion questions on slide|no visuals?"
+    r")\b",
+    re.I,
+)
+_SLIDE_ABSENCE_SENTENCE = re.compile(
+    r"(?:^|[.!?]\s+)(?:The )?(?:slide )?(?:contains |has |presents? |shows? )?"
+    r"no (?:equations?|diagrams?|visual aids?|latex)[^.!?]*[.!?]\s*",
+    re.I | re.MULTILINE,
 )
 
 
@@ -79,10 +92,14 @@ def prompt_char_budget(max_model_len: int, output_tokens: int, reserve: int = 76
 
 
 def fit_prompt(text: str, budget: int) -> str:
+    """Trim prompt context without markers the model might copy into output."""
     text = (text or "").strip()
     if len(text) <= budget:
         return text
-    return text[: max(0, budget - 40)] + "\n\n... [truncated for context limit]"
+    cut = text[: max(0, budget - 1)]
+    if " " in cut:
+        cut = cut.rsplit(" ", 1)[0]
+    return cut + "…"
 
 
 def transcript_for_range(
@@ -195,8 +212,8 @@ Rules:
 - Cover the ENTIRE window {win_start}–{win_end} with contiguous segments (no gaps).
 - Use scene_ids from the catalog below.
 - Be specific about concepts, formulas, and examples taught in each segment.
-- title: short descriptive phrase (3–10 words). NO markdown, NO LaTeX, NO ellipsis (...).
-- summary: 2–3 complete sentences with proper ending punctuation. Synthesize — do NOT copy transcript verbatim.
+- title: what the lecturer is teaching (3–10 words). NEVER describe what is missing from the slide ("No equations on slide", "No diagrams", etc.).
+- summary: 2–3 complete sentences about the concepts taught — not about slide visuals. Synthesize — do NOT copy transcript verbatim.
 - key_points: complete bullet phrases, not speech fragments.
 
 Scene catalog (id|time|slide|audio):
@@ -235,7 +252,8 @@ Return ONLY JSON:
 
 Text quality rules (STRICT):
 - Every title is a short descriptive phrase — NO markdown (**bold**), NO LaTeX blocks, NO "..."
-- Every summary is polished prose (2–4 sentences), ends with . ! or ?
+- Segment titles describe what is being taught — NEVER "No equations on slide" or similar slide-absence labels
+- Every summary is polished prose (2–4 sentences), ends with . ! or ? — focus on concepts, not slide visuals
 - Do NOT paste raw transcript ("So here you have...", "That's your input...")
 - Preserve all start_sec, end_sec, scene_ids from input segments
 
@@ -250,7 +268,8 @@ Rewrite ONLY text fields: title, subtitle, summary, segment titles, segment summ
 
 Rules:
 - title (topic & segment): 3–10 word descriptive phrase. NO markdown, NO LaTeX, NO ellipsis.
-- summary: 2–4 complete sentences; must end with . ! or ?; never truncate mid-thought.
+- Segment titles: what is taught in that period — NEVER slide-absence labels ("No equations on slide", etc.).
+- summary: 2–4 complete sentences about concepts taught; must end with . ! or ?; never truncate mid-thought.
 - key_points: complete concise bullets.
 - Synthesize concepts from transcript — do NOT copy speech verbatim.
 
@@ -262,10 +281,9 @@ Transcript reference (for accuracy only — do not copy phrasing):
 """
 
 
-def outline_window(
-    engine, scenes: list[dict], win_start: float, win_end: float
+def outline_window_fallback(
+    window_scenes: list[dict], win_start: float, win_end: float
 ) -> list[dict]:
-    window_scenes = scenes_in_range(scenes, win_start, win_end)
     if not window_scenes:
         return [
             {
@@ -277,19 +295,6 @@ def outline_window(
                 "scene_ids": [],
             }
         ]
-    prompt = WINDOW_OUTLINE_PROMPT.format(
-        win_start=win_start,
-        win_end=win_end,
-        catalog=compact_catalog(window_scenes),
-    )
-    try:
-        parsed = parse_json_block(engine.generate_one(text_messages(prompt)))
-        segs = parsed.get("segments", parsed) if isinstance(parsed, dict) else parsed
-        if isinstance(segs, list) and segs:
-            return segs
-    except (json.JSONDecodeError, ValueError, TypeError, AttributeError) as exc:
-        print(f"    warning: window outline failed ({exc})")
-    # Fallback: one segment per ~3 scenes
     fallback = []
     batch = 3
     for i in range(0, len(window_scenes), batch):
@@ -307,6 +312,50 @@ def outline_window(
     return fallback
 
 
+def outline_window_prompt(
+    scenes: list[dict], win_start: float, win_end: float
+) -> list[dict] | None:
+    window_scenes = scenes_in_range(scenes, win_start, win_end)
+    if not window_scenes:
+        return None
+    prompt = WINDOW_OUTLINE_PROMPT.format(
+        win_start=win_start,
+        win_end=win_end,
+        catalog=compact_catalog(window_scenes),
+    )
+    return text_messages(prompt)
+
+
+def parse_outline_window_response(
+    text: str,
+    scenes: list[dict],
+    win_start: float,
+    win_end: float,
+) -> list[dict]:
+    window_scenes = scenes_in_range(scenes, win_start, win_end)
+    try:
+        parsed = parse_json_block(text)
+        segs = parsed.get("segments", parsed) if isinstance(parsed, dict) else parsed
+        if isinstance(segs, list) and segs:
+            return segs
+    except (json.JSONDecodeError, ValueError, TypeError, AttributeError) as exc:
+        print(f"    warning: window outline failed ({exc})")
+    return outline_window_fallback(window_scenes, win_start, win_end)
+
+
+def outline_window(
+    engine, scenes: list[dict], win_start: float, win_end: float
+) -> list[dict]:
+    window_scenes = scenes_in_range(scenes, win_start, win_end)
+    if not window_scenes:
+        return outline_window_fallback(window_scenes, win_start, win_end)
+    messages = outline_window_prompt(scenes, win_start, win_end)
+    if messages is None:
+        return outline_window_fallback(window_scenes, win_start, win_end)
+    text = engine.generate_one(messages)
+    return parse_outline_window_response(text, scenes, win_start, win_end)
+
+
 def build_topic_outline(
     engine,
     scenes: list[dict],
@@ -314,6 +363,7 @@ def build_topic_outline(
     whisper_segments: list[dict] | None = None,
     max_model_len: int = 16384,
     outline_tokens: int = 4096,
+    outline_batch_size: int = 4,
 ) -> dict:
     if not scenes:
         return {"title": "Lecture", "subtitle": "", "topics": [], "references": []}
@@ -322,15 +372,42 @@ def build_topic_outline(
     window_sec = window_minutes * 60
     all_segments: list[dict] = []
 
+    windows: list[tuple[float, float]] = []
     t = 0.0
-    win_num = 0
     while t < end_time:
-        win_end = min(t + window_sec, end_time)
-        win_num += 1
-        print(f"  outline window {win_num}: {fmt_range(t, win_end)} ...")
-        segs = outline_window(engine, scenes, t, win_end)
-        all_segments.extend(segs)
-        t = win_end
+        windows.append((t, min(t + window_sec, end_time)))
+        t = windows[-1][1]
+
+    pending: list[tuple[float, float, list[dict] | None]] = []
+    for win_start, win_end in windows:
+        pending.append((win_start, win_end, outline_window_prompt(scenes, win_start, win_end)))
+
+    print(
+        f"  outline: {len(windows)} window(s), vLLM batch_size={outline_batch_size} ..."
+    )
+    win_num = 0
+    for start in range(0, len(pending), outline_batch_size):
+        batch = pending[start : start + outline_batch_size]
+        batch_msgs = [item[2] for item in batch if item[2] is not None]
+        batch_texts: list[str] = []
+        if batch_msgs:
+            batch_texts = engine.generate_batch_chunked(
+                batch_msgs,
+                len(batch_msgs),
+                max_tokens=outline_tokens,
+            )
+        text_idx = 0
+        for win_start, win_end, messages in batch:
+            win_num += 1
+            print(f"  outline window {win_num}: {fmt_range(win_start, win_end)} ...")
+            if messages is None:
+                segs = outline_window_fallback([], win_start, win_end)
+            else:
+                segs = parse_outline_window_response(
+                    batch_texts[text_idx], scenes, win_start, win_end
+                )
+                text_idx += 1
+            all_segments.extend(segs)
 
     print("  merging into major topics ...")
     merge_prompt = MERGE_TOPICS_PROMPT.format(
@@ -412,10 +489,212 @@ SPEECH_START = re.compile(
 )
 
 
+def is_junk_segment_title(title: str) -> bool:
+    title = (title or "").strip()
+    if not title or len(title) < 4:
+        return True
+    if SKIP_KEYWORDS.search(title) or JUNK_SEGMENT_TITLE.search(title):
+        return True
+    return False
+
+
+def is_weak_segment_title(title: str) -> bool:
+    title = (title or "").strip()
+    if is_junk_segment_title(title):
+        return True
+    if title.endswith("..."):
+        return True
+    if re.match(r"^The (?:lecture|slide)\b", title, re.I):
+        return True
+    if re.match(r"^(Its|It|These|Their|To|Students)\b", title, re.I):
+        return True
+    return False
+
+
+def teaching_phrase(text: str) -> str:
+    """Turn meta lecture/slide phrasing into a plain concept phrase."""
+    text = (text or "").strip().rstrip(".")
+    if not text:
+        return ""
+    text = re.sub(
+        r"^The lecture (?:explains|emphasizes|highlights|encourages|introduces|discusses) "
+        r"(?:how |that )?",
+        "",
+        text,
+        flags=re.I,
+    )
+    text = re.sub(
+        r"^The slide (?:presents|shows|contains|lacks) ",
+        "",
+        text,
+        flags=re.I,
+    )
+    text = text.strip(" .")
+    if not text or re.match(r"^(Its|It|These|Their|To|Students)\b", text, re.I):
+        return ""
+    return text[0].upper() + text[1:]
+
+
+def content_from_summary(summary: str) -> str:
+    """Keep teaching content; drop slide-absence meta from summaries."""
+    summary = (summary or "").strip()
+    if ":" in summary:
+        left, right = summary.split(":", 1)
+        if is_weak_segment_title(left):
+            summary = right.strip()
+    sentences = re.split(r"(?<=[.!?])\s+", summary)
+    kept: list[str] = []
+    for sentence in sentences:
+        if not sentence.strip():
+            continue
+        if JUNK_SEGMENT_TITLE.search(sentence):
+            continue
+        if re.search(
+            r"\b(slide (?:contains no|lacks|presents)|contains no equations?|"
+            r"no visual aids?|reinforcing the (?:conceptual|abstract)|"
+            r"abstract nature of)\b",
+            sentence,
+            re.I,
+        ):
+            continue
+        phrase = teaching_phrase(sentence)
+        if phrase and not is_weak_segment_title(phrase):
+            kept.append(phrase if phrase.endswith((".", "!", "?")) else phrase + ".")
+    return " ".join(kept).strip() or teaching_phrase(summary) or summary
+
+
+def title_from_transcript(lookup: dict[int, dict], scene_ids: list) -> str:
+    for sid in scene_ids:
+        scene = lookup.get(int(sid))
+        if not scene:
+            continue
+        for field in ("transcript", "vlm_description"):
+            text = str(scene.get(field, "")).strip()
+            if len(text) < 24:
+                continue
+            if SPEECH_START.match(text):
+                text = re.sub(
+                    r"^(?:So |And |Here |Now |Okay |Um |That's |This is |You have )+",
+                    "",
+                    text,
+                    flags=re.I,
+                ).strip()
+            if len(text) < 24 or is_junk_segment_title(text):
+                continue
+            phrase = teaching_phrase(text.split(".")[0])
+            if phrase and not is_weak_segment_title(phrase):
+                return truncate(phrase, 60)
+            return truncate(text, 60)
+    return ""
+
+
+def derive_segment_title(
+    seg: dict,
+    lookup: dict[int, dict] | None = None,
+    *,
+    topic_title: str = "",
+) -> str:
+    for point in seg.get("key_points") or []:
+        point = teaching_phrase(str(point).strip())
+        if point and not is_weak_segment_title(point):
+            return truncate(point, 60)
+
+    if lookup:
+        from_transcript = title_from_transcript(lookup, seg.get("scene_ids") or [])
+        if from_transcript and not is_weak_segment_title(from_transcript):
+            return from_transcript
+
+    summary = content_from_summary(str(seg.get("summary", "")))
+    if summary:
+        first = re.split(r"[.!?]", summary)[0].strip()
+        phrase = teaching_phrase(first)
+        if phrase and not is_weak_segment_title(phrase):
+            return truncate(phrase, 60)
+
+    if topic_title:
+        return truncate(topic_title, 60)
+    return "Lecture segment"
+
+
+def sanitize_segment_fields(
+    seg: dict,
+    lookup: dict[int, dict] | None = None,
+    *,
+    topic_title: str = "",
+) -> dict:
+    item = dict(seg)
+    if is_weak_segment_title(str(item.get("title", ""))):
+        item["title"] = derive_segment_title(
+            item, lookup, topic_title=topic_title
+        )
+    item["summary"] = content_from_summary(str(item.get("summary", "")))
+    if not item["summary"] or is_weak_segment_title(item["summary"]):
+        item["summary"] = item["title"]
+    return item
+
+
+def sanitize_outline(outline: dict, scenes: list[dict] | None = None) -> dict:
+    lookup = scene_by_id(scenes or [])
+    cleaned = dict(outline)
+    topics: list[dict] = []
+    for topic in outline.get("topics", []):
+        item = dict(topic)
+        topic_title = str(topic.get("title", ""))
+        item["segments"] = [
+            sanitize_segment_fields(seg, lookup, topic_title=topic_title)
+            for seg in topic.get("segments", [])
+        ]
+        topics.append(item)
+    cleaned["topics"] = topics
+    return cleaned
+
+
+def segment_title_by_time(outline: dict) -> dict[str, str]:
+    titles: dict[str, str] = {}
+    for topic in outline.get("topics", []):
+        for seg in topic.get("segments", []):
+            key = fmt_range(seg.get("start_sec", 0), seg.get("end_sec", 0))
+            titles[key] = str(seg.get("title", ""))
+    return titles
+
+
+def sanitize_segment_headings(md: str, outline: dict | None = None) -> str:
+    title_map = segment_title_by_time(outline) if outline else {}
+
+    def _fix(match: re.Match[str]) -> str:
+        time_range = match.group(1)
+        title = match.group(2).strip()
+        if is_weak_segment_title(title):
+            title = title_map.get(time_range) or teaching_phrase(title)
+            if is_weak_segment_title(title):
+                title = "Lecture segment"
+        return f"### {time_range} — {title}"
+
+    return re.sub(
+        r"^###\s+(\d{2}:\d{2}(?::\d{2})?[–-]\d{2}:\d{2}(?::\d{2})?)\s+—\s+(.+)$",
+        _fix,
+        md,
+        flags=re.MULTILINE,
+    )
+
+
+def strip_slide_absence_sentences(md: str) -> str:
+    md = _SLIDE_ABSENCE_SENTENCE.sub("", md)
+    md = re.sub(
+        r"(?m)^.*\b(reinforcing the conceptual nature|emphasizing the conceptual framework)\b.*\n?",
+        "",
+        md,
+        flags=re.I,
+    )
+    return md
+
+
 def looks_incomplete(text: str, *, is_title: bool = False) -> bool:
     text = (text or "").strip()
     min_len = 4 if is_title else 12
     if not text or len(text) < min_len:
+        return True
+    if is_title and is_weak_segment_title(text):
         return True
     if text.endswith("..."):
         return True
@@ -591,58 +870,149 @@ def pick_main_scenes_from_outline(outline: dict, scenes: list[dict], max_n: int)
 # Phase 2 — detailed sections (one per topic) + refinement passes
 # ---------------------------------------------------------------------------
 
-TOPIC_DETAIL_PROMPT = """Write a GRANULAR, detailed Markdown section for ONE lecture topic.
+TOPIC_DETAIL_PROMPT = """You are writing FIRST-PRINCIPLES lecture notes for a student who knows NOTHING about this topic yet.
+Explain like you are teaching a curious beginner — simple words first, then depth. Never hand-wave.
 
 Topic {topic_id}: **{topic_title}** ({time_range})
+Papers available for grounding: {papers_available}
 
-## Layout rules (STRICT — follow exactly)
-Each time segment MUST use this block order:
-1. `### {{segment_time}} — {{segment_title}}`
+## Layout rules (STRICT)
+Each segment MUST use this exact block order:
+1. `### {{segment_time}} — {{segment_title}}` — use the `segment_time` field from JSON (MM:SS or HH:MM:SS). NEVER use raw `start_sec`/`end_sec` numbers.
 2. **Figures first** — copy every string from the segment `figures` list exactly (one per line), immediately after the heading
-3. **Then text** — explanation sections below the images
+3. **All teaching sections below** (every section below is MANDATORY for every segment — write substantial paragraphs, not one-liners)
 
 ## Math rules (STRICT)
-- Write ALL mathematics in TeX/LaTeX only — Obsidian-compatible
-- Inline math: `$...$` (e.g. `$L \\propto C^{{-0.444}}$`)
-- Display equations on their own line: `$$...$$`
-- Use `\\frac`, `\\cdot`, `\\times`, `\\log`, subscripts `C_{{train}}`, superscripts `10^{{-4}}`
-- NEVER use Unicode math (⁰, ⁴, ×, ∝, etc.) or plain-text formulas like `Compute^0.444`
+- TeX/LaTeX only: inline `$...$`, display `$$...$$`
+- Define EVERY symbol when you introduce an equation
+- NEVER use Unicode math or plain-text formulas
 
-## Text sections (after figures)
-For EACH segment include, in this order:
-- **What is covered:** detailed explanation (teach the material)
-- **Key points:** bullet list
-- **Equations & definitions:** every formula in TeX (`$...$` or `$$...$$`); define symbols
-- `> 🔁 Revisit lecture:` {{segment_time}}
+## MANDATORY sections (after figures, for EACH segment, in this order)
 
-Do NOT put figures after the text. Do NOT skip any segment.
-Do NOT include "what you might miss", skip warnings, or meta commentary about missing content.
+- **What is this?** — Precise definition in plain language (2–4 sentences). Assume zero prior knowledge.
+- **Why do we need it?** — What problem does this solve? Why did anyone invent this idea?
+- **What existed before?** — Prior approaches and their limitations.
+- **Core intuition** — Analogy or story that makes the idea click. No jargon without explanation.
+- **What the lecturer said** — Preserve the lecturer's key explanations as quoted or paraphrased transcript (include specific phrases, examples, numbers they mention).
+- **Deep technical explanation** — Full mechanism explained step-by-step in prose.
+- **Mathematics** — Every formula in TeX; derive or explain where each term comes from.
+- **How it works (step-by-step)** — Numbered list of the mechanism/process.
+- **Paper connection** — {paper_instruction}
+- **Concrete example** — Walk through one specific example with numbers or a mini scenario.
+- **If I were implementing this** — What code/modules/data structures would I build? Be specific.
+- **Common misunderstandings** — 2–3 mistakes beginners make and why they are wrong.
+- **Builds on / leads to** — Link to concepts from earlier/later in the lecture.
+- `> 🔁 Revisit lecture:` {{segment_time}} (same human-readable `segment_time` from JSON)
 
-Segments JSON (each segment has a `figures` list — copy those lines exactly to the top of that segment):
+## Quality rules
+- Timestamps must be human-readable (e.g. `01:00:23–01:03:20`), never raw seconds like `3623.053`.
+- Never write truncation markers or meta phrases like "truncated for context limit".
+- Do NOT write repetitive disclaimer lists ("We will not assume..."). Never repeat the same sentence or bullet.
+- Do NOT describe what is missing from slides ("no equations on slide", "slide contains no diagrams"). Teach what is happening.
+- Segment headings must name the concept being taught, not slide visuals.
+- Do NOT summarize in 1–2 sentences where a paragraph is needed.
+- Do NOT skip segments. Do NOT merge segments.
+- Do NOT put figures after text.
+- Prefer completeness over brevity — redundancy that aids understanding is OK.
+- Use the slide descriptions AND transcript AND paper context below — synthesize all three.
+
+Segments JSON (copy `figures` lines exactly after each ### heading):
 {segments_json}
 
-Slide/transcript context:
+Context (slides, transcript, papers):
 {context}
 """
 
-REFINE_TOPIC_PROMPT = """Refine ONE topic section from a lecture report. Return ONLY this topic's markdown.
+PREREQUISITES_PROMPT = """You are preparing a student to understand a technical lecture from scratch.
+
+Lecture: **{title}** — _{subtitle}_
+
+Write a `## Prerequisites` section in Markdown for a beginner. Be granular and concrete.
+
+Structure (STRICT):
+1. Opening paragraph (3–5 sentences): what minimal background you assume and what the lecture will teach.
+2. For EACH prerequisite area relevant to THIS lecture (e.g. probability, LLM inference, unit testing):
+   - `### Area name`
+   - Nested bullet tree of specific sub-skills (not vague labels like "know ML")
+   - Under each leaf: **Why you need this:** one sentence linking to something the lecture or paper uses
+3. `### Prerequisite dependency order` — numbered list: learn A before B because...
+4. If papers are provided: `### Paper-specific prerequisites` — concepts needed to read the cited papers.
+
+Rules:
+- Be specific to THIS lecture (not a generic CS curriculum).
+- Explain jargon when you use it.
+- If a prerequisite itself needs another concept, nest it (recursive dependencies).
+- Write 800–2000 words. Teach with bullets and short paragraphs — not disclaimer lists.
+- Do NOT write repetitive "We will not assume..." or "You don't need to know..." sentences.
+- Do NOT repeat the same sentence, bullet, or phrase. Stop when the structure above is complete.
+- End with a complete sentence — never trail off mid-thought.
+
+Outline:
+{outline_summary}
+
+Transcript excerpt:
+{transcript_excerpt}
+
+{paper_block}
+
+Return ONLY the Markdown starting with `## Prerequisites`. No preamble.
+"""
+
+LEARNING_ROADMAP_PROMPT = """Write a `## Learning Roadmap` for a technical lecture. This is NOT a summary — it is a map for learning.
+
+Lecture: **{title}** — _{subtitle}_
+
+Answer these in order (use ### headings):
+1. **What is this lecture about?** (2–3 sentences, plain language)
+2. **What problem are we solving?** — Why does this problem exist? Who cares?
+3. **Why does it matter?** — Real-world stakes, research motivation.
+4. **What will you understand after?** — Concrete capabilities, not vague "understand X".
+5. **What will you be able to implement?** — Specific engineering outcomes.
+6. **Concept roadmap (in order)** — Numbered list of concepts; each entry: name → one-line intuition → what it enables next.
+7. **How concepts build on each other** — Short dependency paragraph (A requires B because...).
+8. **Paper grounding** — {paper_roadmap_instruction}
+
+Rules:
+- Write for a beginner who will read the detailed notes next.
+- Be specific to this lecture's content.
+- 500–1200 words.
+- Do NOT write repetitive disclaimer lists ("We will not assume..."). Never repeat the same sentence.
+- End with a complete sentence.
+
+Outline:
+{outline_summary}
+
+{paper_block}
+
+Return ONLY Markdown starting with `## Learning Roadmap`. No preamble.
+"""
+
+REFINE_TOPIC_PROMPT = """Expand and refine ONE topic section to FIRST-PRINCIPLES teaching depth. Return ONLY this topic's markdown.
 
 Topic {topic_id}: **{topic_title}** ({time_range})
+Papers available: {papers_available}
+
+The draft may be too shallow. Your job is to make it teach like explaining to a beginner who knows nothing.
 
 Tasks:
-1. Cover EVERY segment in the outline below — do not drop or merge segments
-2. **Layout:** copy `figures` from the segment JSON immediately after each `###` heading, BEFORE text
-3. **Math:** TeX only — `$...$` inline, `$$...$$` display; no Unicode math
-4. Add missing detail, equations, key points; keep `> 🔁 Revisit lecture:` timestamps
-5. Do NOT add "what you might miss", skip warnings, or similar meta sections
+1. Cover EVERY segment — do not drop or merge
+2. Figures immediately after each `###` heading (before text)
+3. EVERY segment must have ALL sections: What is this?, Why do we need it?, What existed before?, Core intuition, What the lecturer said, Deep technical explanation, Mathematics, How it works (step-by-step), Paper connection, Concrete example, If I were implementing this, Common misunderstandings, Builds on / leads to, Revisit lecture timestamp
+4. Expand any section that is missing, one sentence, or vague — add paragraphs
+5. Pull specific details from transcript and paper context below
+6. TeX only for math; define all symbols
+7. Do NOT add meta commentary about missing content or slide visuals ("no equations on slide")
+8. Use `segment_time` from JSON for every ### heading and Revisit line (MM:SS or HH:MM:SS — never raw seconds)
+9. Never output "truncated for context limit" or similar meta text
+10. Segment headings must name the concept taught — not what is absent from the slide
 
-Required segments (all must appear):
+Required segments:
 {segments_json}
 
-Transcript/slide context for this topic:
+Context:
 {context}
 
-Current topic draft:
+Current draft (expand this):
 {draft}
 
 Return the complete topic section starting with `## Topic {topic_id}:`. No preamble.
@@ -720,13 +1090,234 @@ Return the complete topic section starting with `## Topic {topic_id}:`. No pream
 """
 
 
-def strip_miss_sections(md: str) -> str:
-    """Remove skip/warning blocks from generated markdown."""
+_CONTEXT_TRUNC_RE = re.compile(
+    r"\.\.\.\s*\[truncated for context limit\]", re.I
+)
+_ASSUMPTION_SPAM_RE = re.compile(r"We will not assume[^.]+\.", re.I)
+_RAW_SEC_HEADING_RE = re.compile(
+    r"^###\s+(\d+(?:\.\d+)?)\s*[–-]\s*(\d+(?:\.\d+)?)\s+—\s+",
+    re.MULTILINE,
+)
+
+
+def remove_assumption_disclaimers(text: str) -> str:
+    """Strip 'We will not assume...' disclaimer spam without truncating the rest."""
+    if len(_ASSUMPTION_SPAM_RE.findall(text)) < 2:
+        return text
+
+    parts = re.split(r"(\n\n+)", text)
+    kept: list[str] = []
+    for part in parts:
+        if part.startswith("\n") or not _ASSUMPTION_SPAM_RE.search(part):
+            kept.append(part)
+    text = "".join(kept)
+
+    text = re.sub(
+        r"(?m)^You may think you know nothing[^\n]*\n+",
+        "",
+        text,
+        flags=re.I,
+    )
+    text = re.sub(
+        r"(?m)^We['\u2019]ll start from zero[^\n]*\n+",
+        "",
+        text,
+    )
+    text = re.sub(
+        r"(?m)^But you must understand[^\n]*\n+",
+        "",
+        text,
+        flags=re.I,
+    )
+    text = re.sub(r'[ \t]*[""][^"\n]*[""]?[ \t]*', " ", text)
+    text = re.sub(r"[ \t]{2,}", " ", text)
+    return text
+
+
+def collapse_tail_repetition(text: str, *, min_unit: int = 25, min_repeats: int = 3) -> str:
+    """Trim degenerate loops where the same phrase repeats at the end."""
+    if len(text) < min_unit * min_repeats:
+        return text
+    for unit_len in range(min(len(text) // min_repeats, 500), min_unit - 1, -1):
+        unit = text[-unit_len:]
+        if not unit.strip():
+            continue
+        repeats = 1
+        pos = len(text) - unit_len
+        while pos >= unit_len and text[pos - unit_len : pos] == unit:
+            repeats += 1
+            pos -= unit_len
+        if repeats >= min_repeats:
+            return text[: len(text) - unit_len * (repeats - 1)].rstrip()
+    return text
+
+
+def strip_dangling_tail(md: str) -> str:
+    """Remove incomplete trailing fragments (e.g. cut-off 'The paper')."""
+    lines = md.splitlines()
+    while lines:
+        last = lines[-1].strip()
+        if not last:
+            lines.pop()
+            continue
+        if last.startswith(("#", "-", "*", ">", "|", "!", "`")):
+            break
+        if len(last) >= 60 or re.search(r'[.!?"\'\)]$', last):
+            break
+        lines.pop()
+    return "\n".join(lines)
+
+
+def strip_orphan_quote_fragments(md: str) -> str:
+    """Remove lines that are mostly quote fragments left after disclaimer removal."""
+    lines: list[str] = []
+    for line in md.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            lines.append(line)
+            continue
+        if re.match(r"^We['\u2019]ll start from zero\b", stripped, re.I):
+            continue
+        without_quotes = re.sub(r'[""\s]+', "", stripped)
+        if len(without_quotes) < 20 and re.search(r'[""]', stripped):
+            continue
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def collapse_duplicate_lines(md: str) -> str:
+    """Drop lines that repeat 3+ times in a row."""
+    out: list[str] = []
+    prev_key: str | None = None
+    streak = 0
+    for line in md.splitlines():
+        key = line.strip()
+        if key and key == prev_key:
+            streak += 1
+            if streak >= 2:
+                continue
+        else:
+            streak = 0
+        if key:
+            prev_key = key
+        out.append(line)
+    return "\n".join(out)
+
+
+def sanitize_generated_markdown(md: str) -> str:
+    """Remove common LLM degeneration patterns from generated markdown."""
+    md = remove_assumption_disclaimers(md)
+    md = strip_orphan_quote_fragments(md)
+    md = collapse_tail_repetition(md)
+    md = collapse_duplicate_lines(md)
+    md = strip_dangling_tail(md)
+    return md
+
+
+def audit_report_block(md: str, label: str) -> list[str]:
+    """Return human-readable warnings for remaining quality issues."""
+    issues: list[str] = []
+    if _CONTEXT_TRUNC_RE.search(md):
+        issues.append(f"{label}: truncation marker still present")
+    if _ASSUMPTION_SPAM_RE.search(md):
+        issues.append(f"{label}: 'We will not assume' disclaimer list remains")
+    if _RAW_SEC_HEADING_RE.search(md):
+        issues.append(f"{label}: raw-second timestamps in headings")
+    lines = [line.strip() for line in md.strip().splitlines() if line.strip()]
+    if lines:
+        last = lines[-1]
+        if (
+            len(last) < 40
+            and not re.search(r"[.!?\"'\)]$", last)
+            and not last.startswith(("#", "-", "*", ">", "|", "!", "`"))
+        ):
+            issues.append(f"{label}: dangling fragment at end ({last[:48]!r})")
+    prev: str | None = None
+    dup_streak = 0
+    for line in lines:
+        if line == prev:
+            dup_streak += 1
+            if dup_streak >= 2:
+                issues.append(f"{label}: repeated consecutive lines")
+                break
+        else:
+            dup_streak = 0
+        prev = line
+    return issues
+
+
+def sanitize_report_blocks(
+    report_dir: Path,
+    outline: dict,
+    *,
+    rewrite: bool = True,
+) -> list[str]:
+    """Sanitize prerequisites, roadmap, and topic files; return audit warnings."""
+    warnings: list[str] = []
+    topics_dir = report_dir / "topics"
+
+    for name in ("prerequisites.md", "learning_roadmap.md"):
+        path = report_dir / name
+        if not path.exists():
+            continue
+        raw = path.read_text(encoding="utf-8")
+        clean = strip_miss_sections(raw, outline)
+        warnings.extend(audit_report_block(clean, name))
+        if rewrite and clean != raw:
+            path.write_text(clean.strip() + "\n", encoding="utf-8")
+
+    for topic in outline.get("topics", []):
+        tid = topic.get("topic_id", 0)
+        path = topic_markdown_path(topics_dir, tid)
+        if not path.exists():
+            warnings.append(f"topic_{tid:02d}.md: missing")
+            continue
+        raw = path.read_text(encoding="utf-8")
+        clean = strip_miss_sections(raw, outline)
+        warnings.extend(audit_report_block(clean, path.name))
+        if rewrite and clean != raw:
+            path.write_text(clean.strip() + "\n", encoding="utf-8")
+
+    return warnings
+
+
+def normalize_segment_timestamps(md: str) -> str:
+    """Convert raw-second timestamps in headings/revisit lines to MM:SS / HH:MM:SS."""
+
+    def _heading(m: re.Match[str]) -> str:
+        return f"### {fmt_range(float(m.group(1)), float(m.group(2)))} — {m.group(3)}"
+
+    md = re.sub(
+        r"^###\s+(\d+(?:\.\d+)?)\s*[–-]\s*(\d+(?:\.\d+)?)\s+—\s+(.+)$",
+        _heading,
+        md,
+        flags=re.MULTILINE,
+    )
+
+    def _revisit(m: re.Match[str]) -> str:
+        return f"> 🔁 Revisit lecture: {fmt_range(float(m.group(1)), float(m.group(2)))}"
+
+    md = re.sub(
+        r"^>\s*🔁\s*Revisit lecture:\s*(\d+(?:\.\d+)?)\s*[–-]\s*(\d+(?:\.\d+)?)\s*$",
+        _revisit,
+        md,
+        flags=re.MULTILINE,
+    )
+    return md
+
+
+def strip_miss_sections(md: str, outline: dict | None = None) -> str:
+    """Remove skip/warning blocks and leaked prompt artifacts from generated markdown."""
+    md = _CONTEXT_TRUNC_RE.sub("", md)
     md = re.sub(
         r"(?ms)^## What you might miss if you skip this part:\s*\n.*?(?=^## |^> 🔁|\Z)",
         "",
         md,
     )
+    md = sanitize_generated_markdown(md)
+    md = strip_slide_absence_sentences(md)
+    md = sanitize_segment_headings(md, outline)
+    md = normalize_segment_timestamps(md)
     return re.sub(r"\n{3,}", "\n\n", md)
 
 
@@ -766,14 +1357,21 @@ def rewrite_figure_paths(md: str, *, for_topics_dir: bool) -> str:
 
 
 def enrich_segments(
-    segs: list[dict], lookup: dict[int, dict], *, for_topics_dir: bool = False
+    segs: list[dict],
+    lookup: dict[int, dict],
+    *,
+    for_topics_dir: bool = False,
+    topic_title: str = "",
 ) -> list[dict]:
-    """Add markdown figure links for each segment."""
+    """Add human-readable timestamps and markdown figure links for each segment."""
     enriched = []
     for seg in segs:
-        item = dict(seg)
+        item = sanitize_segment_fields(seg, lookup, topic_title=topic_title)
+        start = float(item.get("start_sec", 0))
+        end = float(item.get("end_sec", start))
+        item["segment_time"] = fmt_range(start, end)
         figures = []
-        for sid in seg.get("scene_ids") or []:
+        for sid in item.get("scene_ids") or []:
             sid = int(sid)
             if lookup.get(sid):
                 figures.append(figure_md(sid, for_topics_dir=for_topics_dir))
@@ -808,14 +1406,10 @@ def normalize_segment_images(md: str, *, for_topics_dir: bool = False) -> str:
     return "".join(out)
 
 
-def normalize_report_layout(md: str) -> str:
+def normalize_report_layout(md: str, outline: dict | None = None) -> str:
     """Normalize image placement across the full report."""
-    marker = "## Detailed Breakdown"
-    if marker not in md:
-        return normalize_segment_images(md)
-
-    prefix, body = md.split(marker, 1)
-    return prefix + marker + normalize_segment_images(body, for_topics_dir=False)
+    md = normalize_segment_images(md, for_topics_dir=False)
+    return strip_miss_sections(md, outline)
 
 
 def context_for_scenes(
@@ -823,11 +1417,11 @@ def context_for_scenes(
     scene_ids: list[int],
     lookup: dict,
     *,
-    vlm_limit: int = 400,
-    audio_limit: int = 600,
+    vlm_limit: int = 1500,
+    audio_limit: int = 2500,
 ) -> str:
     lines = []
-    for sid in scene_ids[:8]:
+    for sid in scene_ids[:12]:
         sc = lookup.get(int(sid))
         if not sc:
             continue
@@ -839,11 +1433,58 @@ def context_for_scenes(
     return "\n".join(lines) or "(no slides)"
 
 
+def load_paper_context(run_dir: Path, *, max_chars: int = 32000) -> str:
+    manifest_path = run_dir / "papers" / "manifest.json"
+    if not manifest_path.exists():
+        return ""
+
+    manifest = load_json(manifest_path)
+    blocks: list[str] = []
+    per_paper = max(4000, max_chars // max(len(manifest), 1))
+    for entry in manifest:
+        md_path = run_dir / "papers" / entry.get("markdown", "")
+        if not md_path.exists():
+            continue
+        title = entry.get("title") or md_path.stem
+        body = md_path.read_text(encoding="utf-8").strip()
+        blocks.append(f"### Paper: {title}\n{fit_prompt(body, per_paper)}")
+
+    if not blocks:
+        return ""
+    return "Research paper grounding (parsed PDFs — use for equations, method, motivation, results):\n" + "\n\n".join(blocks)
+
+
+def paper_block_for_prompt(paper_context: str) -> str:
+    if not paper_context.strip():
+        return "No research papers provided."
+    return f"Research papers (authoritative technical source):\n{fit_prompt(paper_context, 14000)}"
+
+
+def paper_instruction(has_papers: bool) -> str:
+    if has_papers:
+        return (
+            "MANDATORY — Map this segment to the paper: cite specific sections, equations, "
+            "figures, method steps, or results from the paper context. Explain what the paper "
+            "says vs. what the lecturer simplified. Quote key equations in TeX."
+        )
+    return "No papers provided — connect to standard literature if the lecturer mentions prior work."
+
+
+def paper_roadmap_instruction(has_papers: bool) -> str:
+    if has_papers:
+        return (
+            "For each provided paper: motivation → contribution → key method → "
+            "important equations → how the lecture maps to paper sections."
+        )
+    return "Note any papers or methods cited in the lecture outline."
+
+
 def context_for_topic(
     topic: dict,
     scenes: list[dict],
     lookup: dict,
     whisper_segments: list[dict],
+    paper_context: str = "",
 ) -> str:
     start = float(topic.get("start_sec", 0))
     end = float(topic.get("end_sec", 0))
@@ -852,10 +1493,185 @@ def context_for_topic(
         scene_ids.extend(int(s) for s in (seg.get("scene_ids") or []))
 
     slide_ctx = context_for_scenes(scenes, scene_ids, lookup)
-    transcript_ctx = transcript_for_range(whisper_segments, start, end)
+    transcript_ctx = transcript_for_range(
+        whisper_segments, start, end, max_chars=14000, window_sec=180.0
+    )
+    parts = [
+        f"Slide context:\n{slide_ctx}",
+        f"Full transcript for this topic (preserve lecturer details):\n{transcript_ctx}",
+    ]
+    if paper_context:
+        parts.append(f"Paper grounding:\n{fit_prompt(paper_context, 10000)}")
+    return "\n\n".join(parts)
+
+
+def write_prerequisites_section(
+    engine,
+    outline: dict,
+    whisper_segments: list[dict],
+    paper_context: str,
+    max_model_len: int,
+) -> str:
+    transcript_excerpt = compact_whisper_transcript(
+        whisper_segments, max_chars=min(12000, prompt_char_budget(max_model_len, 4096) // 2)
+    )
+    body = engine.generate_one(
+        text_messages(
+            PREREQUISITES_PROMPT.format(
+                title=outline.get("title", "Lecture"),
+                subtitle=outline.get("subtitle", ""),
+                outline_summary=outline_summary(outline),
+                transcript_excerpt=transcript_excerpt,
+                paper_block=paper_block_for_prompt(paper_context),
+            )
+        )
+    )
+    text = strip_miss_sections(body.strip())
+    if not text.startswith("## Prerequisites"):
+        text = "## Prerequisites\n\n" + text
+    return text.strip() + "\n"
+
+
+def write_learning_roadmap_section(
+    engine,
+    outline: dict,
+    paper_context: str,
+    max_model_len: int,
+) -> str:
+    has_papers = bool(paper_context.strip())
+    body = engine.generate_one(
+        text_messages(
+            LEARNING_ROADMAP_PROMPT.format(
+                title=outline.get("title", "Lecture"),
+                subtitle=outline.get("subtitle", ""),
+                outline_summary=outline_summary(outline),
+                paper_block=paper_block_for_prompt(paper_context),
+                paper_roadmap_instruction=paper_roadmap_instruction(has_papers),
+            )
+        )
+    )
+    text = strip_miss_sections(body.strip())
+    if not text.startswith("## Learning Roadmap"):
+        text = "## Learning Roadmap\n\n" + text
+    return text.strip() + "\n"
+
+
+def _learning_roadmap_messages(
+    outline: dict, paper_context: str, max_model_len: int
+) -> list[dict]:
+    has_papers = bool(paper_context.strip())
+    return text_messages(
+        LEARNING_ROADMAP_PROMPT.format(
+            title=outline.get("title", "Lecture"),
+            subtitle=outline.get("subtitle", ""),
+            outline_summary=outline_summary(outline),
+            paper_block=paper_block_for_prompt(paper_context),
+            paper_roadmap_instruction=paper_roadmap_instruction(has_papers),
+        )
+    )
+
+
+def _prerequisites_messages(
+    outline: dict,
+    whisper_segments: list[dict],
+    paper_context: str,
+    max_model_len: int,
+) -> list[dict]:
+    transcript_excerpt = compact_whisper_transcript(
+        whisper_segments, max_chars=min(12000, prompt_char_budget(max_model_len, 4096) // 2)
+    )
+    return text_messages(
+        PREREQUISITES_PROMPT.format(
+            title=outline.get("title", "Lecture"),
+            subtitle=outline.get("subtitle", ""),
+            outline_summary=outline_summary(outline),
+            transcript_excerpt=transcript_excerpt,
+            paper_block=paper_block_for_prompt(paper_context),
+        )
+    )
+
+
+def write_front_matter_sections(
+    engine,
+    outline: dict,
+    whisper_segments: list[dict],
+    paper_context: str,
+    max_model_len: int,
+    *,
+    front_batch_size: int = 2,
+) -> tuple[str, str]:
+    """Generate learning roadmap + prerequisites (batched when both needed)."""
+    msgs = [
+        _learning_roadmap_messages(outline, paper_context, max_model_len),
+        _prerequisites_messages(outline, whisper_segments, paper_context, max_model_len),
+    ]
+    if front_batch_size > 1:
+        bodies = engine.generate_batch_chunked(
+            msgs, len(msgs), max_tokens=4096
+        )
+    else:
+        bodies = [engine.generate_one(m, max_tokens=4096) for m in msgs]
+
+    roadmap = strip_miss_sections(bodies[0].strip())
+    if not roadmap.startswith("## Learning Roadmap"):
+        roadmap = "## Learning Roadmap\n\n" + roadmap
+
+    prereq = strip_miss_sections(bodies[1].strip())
+    if not prereq.startswith("## Prerequisites"):
+        prereq = "## Prerequisites\n\n" + prereq
+
+    return roadmap.strip() + "\n", prereq.strip() + "\n"
+
+
+def topic_detail_messages(
+    topic: dict,
+    scenes: list[dict],
+    whisper_segments: list[dict],
+    max_model_len: int,
+    section_tokens: int,
+    paper_context: str = "",
+) -> list[dict]:
+    lookup = scene_by_id(scenes)
+    segs = enrich_segments(
+        topic.get("segments", []),
+        lookup,
+        for_topics_dir=True,
+        topic_title=str(topic.get("title", "")),
+    )
+    budget = prompt_char_budget(max_model_len, section_tokens)
+    has_papers = bool(paper_context.strip())
+    segs_json = compact_segments_json(segs, max_chars=min(10000, budget // 4))
+    context = fit_prompt(
+        context_for_topic(topic, scenes, lookup, whisper_segments, paper_context),
+        budget // 2,
+    )
+    return text_messages(
+        TOPIC_DETAIL_PROMPT.format(
+            topic_id=topic.get("topic_id", 0),
+            topic_title=topic.get("title", "Topic"),
+            time_range=fmt_range(topic.get("start_sec", 0), topic.get("end_sec", 0)),
+            papers_available="yes" if has_papers else "no",
+            paper_instruction=paper_instruction(has_papers),
+            segments_json=segs_json,
+            context=context,
+        )
+    )
+
+
+def topic_section_header(topic: dict) -> str:
     return (
-        f"Slide context (truncated per scene):\n{slide_ctx}\n\n"
-        f"Transcript by time window:\n{transcript_ctx}"
+        f"## Topic {topic.get('topic_id', 0)}: {topic.get('title', 'Topic')}\n"
+        f"> ⏱ Session: {fmt_range(topic.get('start_sec', 0), topic.get('end_sec', 0))}\n"
+    )
+
+
+def finalize_topic_section(
+    topic: dict, body: str, outline: dict | None = None
+) -> str:
+    header = topic_section_header(topic)
+    return strip_miss_sections(
+        header + "\n" + normalize_segment_images(body, for_topics_dir=True),
+        outline,
     )
 
 
@@ -866,34 +1682,134 @@ def write_topic_section(
     whisper_segments: list[dict],
     max_model_len: int,
     section_tokens: int,
+    paper_context: str = "",
+    outline: dict | None = None,
 ) -> str:
-    lookup = scene_by_id(scenes)
-    segs = enrich_segments(topic.get("segments", []), lookup, for_topics_dir=True)
-    budget = prompt_char_budget(max_model_len, section_tokens)
-    segs_json = compact_segments_json(segs, max_chars=min(8000, budget // 3))
-    context = fit_prompt(
-        context_for_topic(topic, scenes, lookup, whisper_segments),
-        budget // 3,
-    )
-
     body = engine.generate_one(
-        text_messages(
-            TOPIC_DETAIL_PROMPT.format(
-                topic_id=topic.get("topic_id", 0),
-                topic_title=topic.get("title", "Topic"),
-                time_range=fmt_range(topic.get("start_sec", 0), topic.get("end_sec", 0)),
-                segments_json=segs_json,
-                context=context,
-            )
+        topic_detail_messages(
+            topic, scenes, whisper_segments, max_model_len, section_tokens, paper_context
+        ),
+        max_tokens=section_tokens,
+    )
+    return finalize_topic_section(topic, body, outline)
+
+
+def write_topics_batched(
+    engine,
+    topics: list[dict],
+    scenes: list[dict],
+    whisper_segments: list[dict],
+    max_model_len: int,
+    section_tokens: int,
+    paper_context: str,
+    *,
+    topic_batch_size: int,
+    outline: dict | None = None,
+) -> dict[int, str]:
+    """Generate multiple topic sections via vLLM continuous batching."""
+    if not topics:
+        return {}
+
+    messages_list = [
+        topic_detail_messages(
+            topic, scenes, whisper_segments, max_model_len, section_tokens, paper_context
+        )
+        for topic in topics
+    ]
+    labels = [
+        f"topic {topic.get('topic_id', 0)}: {str(topic.get('title', 'Topic'))[:40]}"
+        for topic in topics
+    ]
+    print(
+        f"  vLLM batch-write {len(topics)} topics "
+        f"(batch_size={topic_batch_size}): {', '.join(labels)} ..."
+    )
+    bodies = engine.generate_batch_chunked(
+        messages_list, topic_batch_size, max_tokens=section_tokens
+    )
+    return {
+        int(topic.get("topic_id", 0)): finalize_topic_section(topic, body, outline)
+        for topic, body in zip(topics, bodies)
+    }
+
+
+def refine_topic_messages(
+    topic: dict,
+    body: str,
+    scenes: list[dict],
+    whisper_segments: list[dict],
+    max_model_len: int,
+    refine_tokens: int,
+    paper_context: str,
+) -> list[dict]:
+    lookup = scene_by_id(scenes)
+    segs = enrich_segments(
+        topic.get("segments", []),
+        lookup,
+        for_topics_dir=True,
+        topic_title=str(topic.get("title", "")),
+    )
+    budget = prompt_char_budget(max_model_len, refine_tokens)
+    segs_json = compact_segments_json(segs, max_chars=min(6000, budget // 4))
+    has_papers = bool(paper_context.strip())
+    context = fit_prompt(
+        context_for_topic(topic, scenes, lookup, whisper_segments, paper_context),
+        budget // 2,
+    )
+    draft_cap = min(12000, budget // 2)
+    return text_messages(
+        REFINE_TOPIC_PROMPT.format(
+            topic_id=topic.get("topic_id", 0),
+            topic_title=topic.get("title", "Topic"),
+            time_range=fmt_range(topic.get("start_sec", 0), topic.get("end_sec", 0)),
+            papers_available="yes" if has_papers else "no",
+            segments_json=segs_json,
+            context=context,
+            draft=fit_prompt(body, draft_cap),
         )
     )
-    header = (
-        f"## Topic {topic.get('topic_id', 0)}: {topic.get('title', 'Topic')}\n"
-        f"> ⏱ Session: {fmt_range(topic.get('start_sec', 0), topic.get('end_sec', 0))}\n"
-    )
-    return strip_miss_sections(
-        header + "\n" + normalize_segment_images(body, for_topics_dir=True)
-    )
+
+
+def refine_topics_batched(
+    engine,
+    topics: list[dict],
+    drafts: dict[int, str],
+    scenes: list[dict],
+    whisper_segments: list[dict],
+    max_model_len: int,
+    refine_tokens: int,
+    paper_context: str,
+    *,
+    passes: int,
+    topic_batch_size: int,
+    outline: dict | None = None,
+) -> dict[int, str]:
+    """Run refinement passes; batch independent topics within each pass."""
+    current = dict(drafts)
+    for pass_num in range(1, passes + 1):
+        print(f"  refine pass {pass_num}/{passes} ({len(topics)} topics) ...")
+        messages_list = [
+            refine_topic_messages(
+                topic,
+                current[int(topic.get("topic_id", 0))],
+                scenes,
+                whisper_segments,
+                max_model_len,
+                refine_tokens,
+                paper_context,
+            )
+            for topic in topics
+        ]
+        bodies = engine.generate_batch_chunked(
+            messages_list, topic_batch_size, max_tokens=refine_tokens
+        )
+        for topic, body in zip(topics, bodies):
+            tid = int(topic.get("topic_id", 0))
+            current[tid] = strip_miss_sections(
+                normalize_segment_images(body, for_topics_dir=True),
+                outline,
+            )
+    return current
 
 
 def render_master_timeline(outline: dict) -> str:
@@ -929,9 +1845,15 @@ def render_topic_index(outline: dict) -> str:
         )
         lines.append("")
         for seg in topic.get("segments", []):
+            title = str(seg.get("title", "")).strip()
+            summary = str(seg.get("summary", "")).strip()
+            if summary and summary != title and not summary.startswith(title):
+                detail = f"{title}: {summary}"
+            else:
+                detail = title
             lines.append(
                 f"- **{fmt_range(seg.get('start_sec', 0), seg.get('end_sec', 0))}** — "
-                f"{seg.get('title', '')}: {seg.get('summary', '')}"
+                f"{detail}"
             )
         lines.append("")
     return "\n".join(lines)
@@ -976,9 +1898,16 @@ def render_references(outline: dict) -> str:
 
 
 def render_mindmap_prompt(title: str) -> str:
-    return f"""Add ONLY a `## Mind Map` section with ```mermaid mindmap``` for: {title}
-Root = lecture topic. Include all major topics and 2-3 sub-concepts each.
-Return ONLY the Mind Map section markdown."""
+    return f"""Add ONLY a `## Concept Dependency Map` section with a ```mermaid flowchart TD``` diagram for: {title}
+
+Show the CONCEPTUAL DEPENDENCY structure (not a generic topic tree):
+- Start with Problem / Motivation at the top
+- Prerequisites feed into CoreConcept
+- CoreConcept → Mechanism → Architecture/Method → Training/Inference → Evaluation → Limitations → Extensions
+- Use labeled arrows showing WHY one concept requires another (e.g. "requires understanding of X")
+- Include 8–15 nodes; group related ideas
+
+Return ONLY the section markdown starting with `## Concept Dependency Map`."""
 
 
 def refine_topic_section(
@@ -990,38 +1919,29 @@ def refine_topic_section(
     passes: int,
     max_model_len: int,
     refine_tokens: int,
+    paper_context: str = "",
+    outline: dict | None = None,
+    topic_batch_size: int = 1,
 ) -> str:
-    """Refine one topic at a time — avoids truncating the full report."""
+    """Refine one topic (uses batched helper for consistency)."""
     if passes <= 0:
         return body
 
-    lookup = scene_by_id(scenes)
-    segs = enrich_segments(topic.get("segments", []), lookup, for_topics_dir=True)
-    budget = prompt_char_budget(max_model_len, refine_tokens)
-    segs_json = compact_segments_json(segs, max_chars=min(6000, budget // 4))
-    context = fit_prompt(
-        context_for_topic(topic, scenes, lookup, whisper_segments),
-        budget // 4,
+    tid = int(topic.get("topic_id", 0))
+    refined = refine_topics_batched(
+        engine,
+        [topic],
+        {tid: body},
+        scenes,
+        whisper_segments,
+        max_model_len,
+        refine_tokens,
+        paper_context,
+        passes=passes,
+        topic_batch_size=max(1, topic_batch_size),
+        outline=outline,
     )
-    draft_cap = min(8000, budget // 2)
-
-    topic_id = topic.get("topic_id", 0)
-    for i in range(passes):
-        print(f"    refine topic {topic_id} pass {i + 1}/{passes} ...")
-        body = engine.generate_one(
-            text_messages(
-                REFINE_TOPIC_PROMPT.format(
-                    topic_id=topic_id,
-                    topic_title=topic.get("title", "Topic"),
-                    time_range=fmt_range(topic.get("start_sec", 0), topic.get("end_sec", 0)),
-                    segments_json=segs_json,
-                    context=context,
-                    draft=fit_prompt(body, draft_cap),
-                )
-            )
-        )
-        body = normalize_segment_images(body, for_topics_dir=True)
-    return strip_miss_sections(body)
+    return refined[tid]
 
 
 def compact_whisper_transcript(
@@ -1099,7 +2019,12 @@ def fix_topic_from_audit(
     verify_tokens: int,
     lookup: dict[int, dict],
 ) -> str:
-    segs = enrich_segments(topic.get("segments", []), lookup, for_topics_dir=True)
+    segs = enrich_segments(
+        topic.get("segments", []),
+        lookup,
+        for_topics_dir=True,
+        topic_title=str(topic.get("title", "")),
+    )
     budget = prompt_char_budget(max_model_len, verify_tokens)
     segs_json = compact_segments_json(segs, max_chars=min(6000, budget // 4))
     transcript = fit_prompt(
@@ -1150,35 +2075,49 @@ def regenerate_topics(
     section_tokens: int,
     refine_passes: int,
     refine_tokens: int,
+    paper_context: str = "",
+    *,
+    topic_batch_size: int = 2,
+    outline: dict | None = None,
 ) -> list[str]:
     updated = list(bodies)
-    for topic in topics:
+    to_regen = [t for t in topics if int(t.get("topic_id") or 0) in topic_ids]
+    if not to_regen:
+        return updated
+
+    print(f"    regenerate {len(to_regen)} topic(s) (batch_size={topic_batch_size}) ...")
+    drafts = write_topics_batched(
+        engine,
+        to_regen,
+        scenes,
+        whisper_segments,
+        max_model_len,
+        section_tokens,
+        paper_context,
+        topic_batch_size=topic_batch_size,
+        outline=outline,
+    )
+    if refine_passes > 0:
+        drafts = refine_topics_batched(
+            engine,
+            to_regen,
+            drafts,
+            scenes,
+            whisper_segments,
+            max_model_len,
+            refine_tokens,
+            paper_context,
+            passes=refine_passes,
+            topic_batch_size=topic_batch_size,
+            outline=outline,
+        )
+
+    for topic in to_regen:
         tid = int(topic.get("topic_id") or 0)
-        if tid not in topic_ids:
-            continue
         idx = next((i for i, t in enumerate(topics) if t.get("topic_id") == tid), None)
         if idx is None:
             continue
-        label = topic.get("title", "Topic")[:50]
-        print(f"    regenerate topic {tid}: {label} ...")
-        body = write_topic_section(
-            engine, topic, scenes, whisper_segments, max_model_len, section_tokens
-        )
-        if refine_passes > 0:
-            engine.config.max_new_tokens = refine_tokens
-            body = refine_topic_section(
-                engine,
-                body,
-                topic,
-                scenes,
-                whisper_segments,
-                refine_passes,
-                max_model_len,
-                refine_tokens,
-            )
-        body = strip_miss_sections(
-            normalize_segment_images(body, for_topics_dir=True)
-        ).strip() + "\n"
+        body = drafts[tid].strip() + "\n"
         topic_markdown_path(topics_dir, tid).write_text(body, encoding="utf-8")
         updated[idx] = body
     return updated
@@ -1203,13 +2142,26 @@ def verify_and_improve_report(
     refine_passes: int,
     refine_tokens: int,
     outline_path: Path,
+    paper_context: str = "",
+    prerequisites_md: str = "",
+    roadmap_md: str = "",
+    *,
+    topic_batch_size: int = 2,
 ) -> tuple[str, list[str], dict]:
     if verify_passes <= 0 or not whisper_segments:
         draft = merge_report(
-            title, subtitle, outline, topic_bodies, references_md, mindmap_md
+            title,
+            subtitle,
+            outline,
+            topic_bodies,
+            references_md,
+            mindmap_md,
+            prerequisites_md,
+            roadmap_md,
         )
-        return normalize_report_layout(strip_miss_sections(draft)), topic_bodies, outline
+        return normalize_report_layout(draft, outline), topic_bodies, outline
 
+    outline = sanitize_outline(outline, scenes)
     lookup = scene_by_id(scenes)
     topics = outline.get("topics", [])
     topic_by_id = {t.get("topic_id", 0): t for t in topics}
@@ -1217,9 +2169,17 @@ def verify_and_improve_report(
     duration_sec = max(s["end"] for s in scenes) if scenes else 0.0
 
     draft = normalize_report_layout(
-        strip_miss_sections(
-            merge_report(title, subtitle, outline, bodies, references_md, mindmap_md)
-        )
+        merge_report(
+            title,
+            subtitle,
+            outline,
+            bodies,
+            references_md,
+            mindmap_md,
+            prerequisites_md,
+            roadmap_md,
+        ),
+        outline,
     )
 
     for pass_num in range(1, verify_passes + 1):
@@ -1256,13 +2216,23 @@ def verify_and_improve_report(
                     section_tokens,
                     refine_passes,
                     refine_tokens,
+                    paper_context,
+                    topic_batch_size=topic_batch_size,
+                    outline=outline,
                 )
+                outline = sanitize_outline(outline, scenes)
                 draft = normalize_report_layout(
-                    strip_miss_sections(
-                        merge_report(
-                            title, subtitle, outline, bodies, references_md, mindmap_md
-                        )
-                    )
+                    merge_report(
+                        title,
+                        subtitle,
+                        outline,
+                        bodies,
+                        references_md,
+                        mindmap_md,
+                        prerequisites_md,
+                        roadmap_md,
+                    ),
+                    outline,
                 )
 
         engine.config.max_new_tokens = verify_tokens
@@ -1322,6 +2292,9 @@ def verify_and_improve_report(
                     section_tokens,
                     refine_passes,
                     refine_tokens,
+                    paper_context,
+                    topic_batch_size=topic_batch_size,
+                    outline=outline,
                 )
 
         by_topic: dict[int, list[dict]] = {}
@@ -1352,16 +2325,22 @@ def verify_and_improve_report(
                 verify_tokens,
                 lookup,
             )
-            fixed = strip_miss_sections(fixed).strip() + "\n"
+            fixed = strip_miss_sections(fixed, outline).strip() + "\n"
             topic_markdown_path(topics_dir, tid).write_text(fixed, encoding="utf-8")
             bodies[idx] = fixed
 
         draft = normalize_report_layout(
-            strip_miss_sections(
-                merge_report(
-                    title, subtitle, outline, bodies, references_md, mindmap_md
-                )
-            )
+            merge_report(
+                title,
+                subtitle,
+                outline,
+                bodies,
+                references_md,
+                mindmap_md,
+                prerequisites_md,
+                roadmap_md,
+            ),
+            outline,
         )
 
         if pass_num == verify_passes:
@@ -1377,28 +2356,25 @@ def merge_report(
     topic_bodies: list[str],
     references_md: str,
     mindmap_md: str,
+    prerequisites_md: str = "",
+    roadmap_md: str = "",
 ) -> str:
     """Assemble final report from per-topic files + front matter + tail sections."""
     parts: list[str] = [
         f"# {title}",
         f"_{subtitle}_" if subtitle else "",
         "",
+    ]
+    if roadmap_md.strip():
+        parts.extend([roadmap_md.strip(), "", "---", ""])
+    if prerequisites_md.strip():
+        parts.extend([prerequisites_md.strip(), "", "---", ""])
+    parts.extend([
         render_master_timeline(outline),
         render_topic_index(outline),
-        "## Detailed Breakdown",
+        "---",
         "",
-        "> **Reading order:** each segment shows **slide figures first** "
-        "(`![image](attachments/scene_XXX.png)`), then the explanation. All math uses **TeX** "
-        "(`$...$` inline, `$$...$$` display).",
-        "",
-        "### Topic files (Obsidian)",
-        "",
-    ]
-    for topic in outline.get("topics", []):
-        tid = topic.get("topic_id", 0)
-        ttitle = topic.get("title", "Topic")
-        parts.append(f"- [[topics/topic_{tid:02d}|Topic {tid}: {ttitle}]]")
-    parts.extend(["", "---", ""])
+    ])
 
     for body in topic_bodies:
         report_body = body.strip().replace("../attachments/", "attachments/")
@@ -1421,7 +2397,12 @@ def count_topic_sections(md: str) -> int:
     return len(re.findall(r"(?m)^## Topic \d+:", md))
 
 
-def load_topic_bodies(topics_dir: Path, outline: dict, *, rewrite: bool = False) -> list[str]:
+def load_topic_bodies(
+    topics_dir: Path,
+    outline: dict,
+    *,
+    rewrite: bool = False,
+) -> list[str]:
     bodies: list[str] = []
     for topic in outline.get("topics", []):
         tid = topic.get("topic_id", 0)
@@ -1431,7 +2412,7 @@ def load_topic_bodies(topics_dir: Path, outline: dict, *, rewrite: bool = False)
                 f"Missing {path.name} — run step 09 without --merge-only to generate it"
             )
         raw = path.read_text(encoding="utf-8")
-        body = strip_miss_sections(raw)
+        body = strip_miss_sections(raw, outline)
         if rewrite and body != raw:
             path.write_text(body.strip() + "\n", encoding="utf-8")
         bodies.append(body)
@@ -1445,16 +2426,28 @@ def merge_only_report(run_dir: Path) -> Path:
     outline_path = report_dir / "topic_outline.json"
     out_path = report_dir / "report.md"
     mindmap_path = report_dir / "mindmap.md"
+    scenes_path = run_dir / "merged" / "scenes_merged.json"
 
     if not outline_path.exists():
         raise FileNotFoundError(f"Outline not found: {outline_path}")
 
-    outline = load_json(outline_path)
-    topic_bodies = load_topic_bodies(topics_dir, outline, rewrite=True)
+    scenes = load_json(scenes_path) if scenes_path.exists() else []
+    outline = sanitize_outline(load_json(outline_path), scenes)
+    save_json(outline_path, outline)
+    block_warnings = sanitize_report_blocks(report_dir, outline, rewrite=True)
+    topic_bodies = load_topic_bodies(topics_dir, outline, rewrite=False)
     mindmap_md = (
         mindmap_path.read_text(encoding="utf-8") if mindmap_path.exists() else ""
     )
 
+    prereq_path = report_dir / "prerequisites.md"
+    roadmap_path = report_dir / "learning_roadmap.md"
+    prerequisites_md = (
+        prereq_path.read_text(encoding="utf-8") if prereq_path.exists() else ""
+    )
+    roadmap_md = (
+        roadmap_path.read_text(encoding="utf-8") if roadmap_path.exists() else ""
+    )
     draft = merge_report(
         outline.get("title", "Lecture Report"),
         outline.get("subtitle", ""),
@@ -1462,9 +2455,15 @@ def merge_only_report(run_dir: Path) -> Path:
         topic_bodies,
         render_references(outline),
         mindmap_md,
+        prerequisites_md,
+        roadmap_md,
     )
-    draft = normalize_report_layout(strip_miss_sections(draft))
+    draft = normalize_report_layout(draft, outline)
+    draft_warnings = audit_report_block(draft, "report.md")
     out_path.write_text(draft.strip() + "\n", encoding="utf-8")
+
+    for warning in block_warnings + draft_warnings:
+        print(f"  audit: {warning}")
 
     n_topics = count_topic_sections(draft)
     expected = len(outline.get("topics", []))
@@ -1519,10 +2518,14 @@ def generate_report(
     force_outline: bool,
     force_topics: bool,
     gpu_memory_utilization: float = 0.82,
+    engine: QwenVllmEngine | None = None,
+    outline_batch_size: int = 4,
+    topic_batch_size: int = 2,
 ) -> Path:
     scenes = load_json(run_dir / "merged" / "scenes_merged.json")
     whisper_path = run_dir / "transcript" / "whisper_segments.json"
     whisper_segments = load_json(whisper_path) if whisper_path.exists() else []
+    paper_context = load_paper_context(run_dir)
     report_dir = run_dir / "report"
     topics_dir = report_dir / "topics"
     attachments_dir = report_dir / "attachments"
@@ -1537,78 +2540,124 @@ def generate_report(
         gpu_memory_utilization=gpu_memory_utilization,
     )
 
-    with qwen_vllm_session(config) as engine:
+    def run_report(active_engine: QwenVllmEngine) -> tuple[str, dict]:
         if outline_path.exists() and not force_outline:
             print(f"Reusing outline: {outline_path}")
             outline = load_json(outline_path)
         else:
             print(f"Phase 1/3: topic + time outline ({len(scenes)} scenes) ...")
-            engine.config.max_new_tokens = 4096
+            active_engine.config.max_new_tokens = 4096
             outline = build_topic_outline(
-                engine,
+                active_engine,
                 scenes,
                 window_minutes,
                 whisper_segments,
                 max_model_len,
                 4096,
+                outline_batch_size,
             )
             save_json(outline_path, outline)
             print(f"  → {len(outline.get('topics', []))} major topics")
+
+        outline = sanitize_outline(outline, scenes)
+        save_json(outline_path, outline)
 
         main_scenes = pick_main_scenes_from_outline(outline, scenes, max_main_scenes)
         save_json(report_dir / "main_scenes.json", {"main_scenes": main_scenes, **outline})
 
         topics = outline.get("topics", [])
-        print(f"Phase 2/3: granular sections — {len(topics)} topics → {topics_dir}/")
-
-        engine.config.max_new_tokens = section_tokens
         title = outline.get("title", "Lecture Report")
         subtitle = outline.get("subtitle", "")
 
-        topic_bodies: list[str] = []
+        prereq_path = report_dir / "prerequisites.md"
+        roadmap_path = report_dir / "learning_roadmap.md"
+        regen_front = force_topics or force_outline or not prereq_path.exists()
+        if regen_front:
+            print("Phase 1.5: learning roadmap + prerequisites (vLLM batch) ...")
+            active_engine.config.max_new_tokens = 4096
+            roadmap_md, prerequisites_md = write_front_matter_sections(
+                active_engine,
+                outline,
+                whisper_segments,
+                paper_context,
+                max_model_len,
+            )
+            roadmap_path.write_text(roadmap_md, encoding="utf-8")
+            prereq_path.write_text(prerequisites_md, encoding="utf-8")
+            print("  → learning_roadmap.md, prerequisites.md")
+        else:
+            print("  reuse learning_roadmap.md + prerequisites.md")
+            roadmap_md = roadmap_path.read_text(encoding="utf-8")
+            prerequisites_md = prereq_path.read_text(encoding="utf-8")
+
+        print(
+            f"Phase 2/3: first-principles topic sections — {len(topics)} topics "
+            f"(batch_size={topic_batch_size}) → {topics_dir}/"
+        )
+
+        active_engine.config.max_new_tokens = section_tokens
+        bodies_by_tid: dict[int, str] = {}
+        to_write: list[dict] = []
         for topic in topics:
-            tid = topic.get("topic_id", 0)
+            tid = int(topic.get("topic_id", 0))
             topic_path = topic_markdown_path(topics_dir, tid)
             label = topic.get("title", "Topic")[:50]
 
             if topic_path.exists() and not force_topics:
                 print(f"  reuse topic {tid}: {label} ...")
-                body = strip_miss_sections(topic_path.read_text(encoding="utf-8"))
-            else:
-                print(f"  write topic {tid}/{len(topics)}: {label} ...")
-                body = write_topic_section(
-                    engine, topic, scenes, whisper_segments, max_model_len, section_tokens
+                bodies_by_tid[tid] = strip_miss_sections(
+                    topic_path.read_text(encoding="utf-8"), outline
                 )
-                if refine_passes > 0:
-                    engine.config.max_new_tokens = refine_tokens
-                    body = refine_topic_section(
-                        engine,
-                        body,
-                        topic,
-                        scenes,
-                        whisper_segments,
-                        refine_passes,
-                        max_model_len,
-                        refine_tokens,
-                    )
-                body = strip_miss_sections(
-                    normalize_segment_images(body, for_topics_dir=True)
-                ).strip() + "\n"
+            else:
+                to_write.append(topic)
+
+        if to_write:
+            drafts = write_topics_batched(
+                active_engine,
+                to_write,
+                scenes,
+                whisper_segments,
+                max_model_len,
+                section_tokens,
+                paper_context,
+                topic_batch_size=topic_batch_size,
+                outline=outline,
+            )
+            if refine_passes > 0:
+                active_engine.config.max_new_tokens = refine_tokens
+                drafts = refine_topics_batched(
+                    active_engine,
+                    to_write,
+                    drafts,
+                    scenes,
+                    whisper_segments,
+                    max_model_len,
+                    refine_tokens,
+                    paper_context,
+                    passes=refine_passes,
+                    topic_batch_size=topic_batch_size,
+                    outline=outline,
+                )
+            for topic in to_write:
+                tid = int(topic.get("topic_id", 0))
+                body = drafts[tid].strip() + "\n"
+                topic_path = topic_markdown_path(topics_dir, tid)
                 topic_path.write_text(body, encoding="utf-8")
+                bodies_by_tid[tid] = body
                 print(f"    → {topic_path.name}")
 
-            topic_bodies.append(body)
+        topic_bodies = [bodies_by_tid[int(t.get("topic_id", 0))] for t in topics]
 
         print(f"Phase 3/3: merge {len(topic_bodies)} topics into report.md ...")
-        engine.config.max_new_tokens = 2048
-        mindmap_md = engine.generate_one(
+        active_engine.config.max_new_tokens = 2048
+        mindmap_md = active_engine.generate_one(
             text_messages(render_mindmap_prompt(title))
         )
         (report_dir / "mindmap.md").write_text(mindmap_md.strip() + "\n", encoding="utf-8")
         references_md = render_references(outline)
 
         draft, topic_bodies, outline = verify_and_improve_report(
-            engine,
+            active_engine,
             run_dir,
             outline,
             scenes,
@@ -1626,8 +2675,49 @@ def generate_report(
             refine_passes,
             refine_tokens,
             outline_path,
+            paper_context,
+            prerequisites_md,
+            roadmap_md,
+            topic_batch_size=topic_batch_size,
         )
         save_json(outline_path, outline)
+
+        print("Final pass: sanitize + audit all report blocks ...")
+        block_warnings = sanitize_report_blocks(report_dir, outline, rewrite=True)
+        outline = sanitize_outline(outline, scenes)
+        save_json(outline_path, outline)
+        draft = normalize_report_layout(
+            merge_report(
+                title,
+                subtitle,
+                outline,
+                load_topic_bodies(topics_dir, outline, rewrite=False),
+                render_references(outline),
+                (report_dir / "mindmap.md").read_text(encoding="utf-8")
+                if (report_dir / "mindmap.md").exists()
+                else "",
+                prereq_path.read_text(encoding="utf-8")
+                if prereq_path.exists()
+                else "",
+                roadmap_path.read_text(encoding="utf-8")
+                if roadmap_path.exists()
+                else "",
+            ),
+            outline,
+        )
+        draft_warnings = audit_report_block(draft, "report.md")
+        for warning in block_warnings + draft_warnings:
+            print(f"  audit: {warning}")
+        if not block_warnings and not draft_warnings:
+            print("  audit: all blocks clean")
+
+        return draft, outline
+
+    if engine is not None:
+        draft, outline = run_report(engine)
+    else:
+        with qwen_vllm_session(config) as active_engine:
+            draft, outline = run_report(active_engine)
 
     out_path.write_text(draft.strip() + "\n", encoding="utf-8")
     n_topics = count_topic_sections(draft)
@@ -1703,6 +2793,18 @@ def main() -> None:
         default=0.82,
         help="vLLM gpu_memory_utilization (lower if GPU is partially in use)",
     )
+    parser.add_argument(
+        "--outline-batch-size",
+        type=int,
+        default=4,
+        help="Outline windows per vLLM batch (parallel continuous batching)",
+    )
+    parser.add_argument(
+        "--topic-batch-size",
+        type=int,
+        default=2,
+        help="Topic sections per vLLM batch during write/refine (raise on large GPUs)",
+    )
     args = parser.parse_args()
 
     if args.merge_only:
@@ -1723,6 +2825,8 @@ def main() -> None:
         args.force_outline,
         args.force_topics,
         args.gpu_mem,
+        args.outline_batch_size,
+        args.topic_batch_size,
     )
 
 

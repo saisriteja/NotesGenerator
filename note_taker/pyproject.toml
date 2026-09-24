@@ -40,7 +40,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-gpu = ["vllm>=0.11.0"]
+gpu = ["vllm>=0.11.0", "ninja>=1.11.0"]
+papers = ["docling>=2.0"]
 
 [project.scripts]
 notesgenerator = "notesgenerator.run_pipeline:main"

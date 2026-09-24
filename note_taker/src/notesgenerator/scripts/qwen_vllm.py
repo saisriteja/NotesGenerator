@@ -113,27 +113,55 @@ class QwenVllmEngine:
         )
         print("vLLM engine ready.")
 
-    def _sampling_params(self):
+    def _sampling_params(self, max_tokens: int | None = None):
         from vllm import SamplingParams
 
         return SamplingParams(
             temperature=self.config.temperature,
-            max_tokens=self.config.max_new_tokens,
+            max_tokens=max_tokens if max_tokens is not None else self.config.max_new_tokens,
             top_k=-1,
         )
 
-    def generate_batch(self, messages_list: list[list[dict]]) -> list[str]:
+    def generate_batch(
+        self,
+        messages_list: list[list[dict]],
+        *,
+        max_tokens: int | None = None,
+    ) -> list[str]:
         if self._llm is None or self._processor is None:
             raise RuntimeError("Engine not loaded")
+        if not messages_list:
+            return []
 
         inputs = [
             prepare_vllm_input(msgs, self._processor) for msgs in messages_list
         ]
-        outputs = self._llm.generate(inputs, sampling_params=self._sampling_params())
+        outputs = self._llm.generate(
+            inputs, sampling_params=self._sampling_params(max_tokens)
+        )
         return [out.outputs[0].text.strip() for out in outputs]
 
-    def generate_one(self, messages: list[dict]) -> str:
-        return self.generate_batch([messages])[0]
+    def generate_batch_chunked(
+        self,
+        messages_list: list[list[dict]],
+        batch_size: int,
+        *,
+        max_tokens: int | None = None,
+    ) -> list[str]:
+        """Run vLLM continuous batching in fixed-size chunks."""
+        if batch_size <= 0:
+            batch_size = len(messages_list) or 1
+        results: list[str] = []
+        for start in range(0, len(messages_list), batch_size):
+            chunk = messages_list[start : start + batch_size]
+            end = min(start + batch_size, len(messages_list))
+            if len(messages_list) > batch_size:
+                print(f"    vLLM batch {start + 1}–{end} / {len(messages_list)} ...")
+            results.extend(self.generate_batch(chunk, max_tokens=max_tokens))
+        return results
+
+    def generate_one(self, messages: list[dict], *, max_tokens: int | None = None) -> str:
+        return self.generate_batch([messages], max_tokens=max_tokens)[0]
 
     def close(self) -> None:
         import torch

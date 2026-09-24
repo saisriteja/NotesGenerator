@@ -17,23 +17,35 @@ def merge_run(run_dir: Path, output_name: str = "scenes_merged.json") -> Path:
     }
 
     aligned_path = run_dir / "merged" / "aligned_scenes.json"
+    aligned_rows: dict[int, dict] = {}
     if aligned_path.exists():
-        aligned = {row["scene_id"]: row["transcript"] for row in load_json(aligned_path)}
+        for row in load_json(aligned_path):
+            aligned_rows[row["scene_id"]] = row
     else:
         segments = load_json(run_dir / "transcript" / "whisper_segments.json")
-        aligned = {}
         for scene in scenes:
             start, end = scene["start"], scene["end"]
-            texts = [
-                seg["text"]
+            matched = [
+                {
+                    "start": seg["start"],
+                    "end": seg["end"],
+                    "text": seg["text"].strip(),
+                }
                 for seg in segments
-                if start <= seg["start"] < end and seg["text"]
+                if seg.get("text")
+                and seg["start"] < end
+                and seg["end"] > start
             ]
-            aligned[scene["scene_id"]] = " ".join(texts).strip()
+            matched.sort(key=lambda row: row["start"])
+            aligned_rows[scene["scene_id"]] = {
+                "transcript": " ".join(row["text"] for row in matched).strip(),
+                "segments": matched,
+            }
 
     merged = []
     for scene in scenes:
         sid = scene["scene_id"]
+        row = aligned_rows.get(sid, {})
         merged.append(
             {
                 "scene_id": sid,
@@ -41,7 +53,8 @@ def merge_run(run_dir: Path, output_name: str = "scenes_merged.json") -> Path:
                 "end": scene["end"],
                 "image_path": f"scenes/keyframes/scene_{sid:03d}.png",
                 "vlm_description": captions.get(sid, ""),
-                "transcript": aligned.get(sid, ""),
+                "transcript": row.get("transcript", ""),
+                "segments": row.get("segments", []),
             }
         )
 

@@ -106,6 +106,13 @@ def print_timing_table(run: PipelineRun) -> None:
 
 def build_env() -> dict:
     env = os.environ.copy()
+    # vLLM / flashinfer JIT-compile CUDA kernels via `ninja` (pip package lives in venv/bin).
+    venv_bin = Path(sys.executable).resolve().parent
+    env["PATH"] = (
+        f"{venv_bin}{os.pathsep}{env['PATH']}"
+        if "PATH" in env
+        else str(venv_bin)
+    )
     models = ROOT / "models"
     env.setdefault("NOTE_TAKER_ROOT", str(ROOT))
     env.setdefault("HF_HOME", str(models / "hub"))
@@ -147,8 +154,21 @@ def main() -> None:
         help="Parent folder for output runs",
     )
     parser.add_argument("--whisper-model", default="medium")
+    parser.add_argument(
+        "--papers",
+        nargs="*",
+        type=Path,
+        default=None,
+        help="Optional research PDF paths to parse with docling",
+    )
     parser.add_argument("--scene-threshold", type=float, default=35.0)
     parser.add_argument("--min-scene-len", type=float, default=4.0)
+    parser.add_argument(
+        "--keyframe-strategy",
+        choices=["last", "midpoint"],
+        default="last",
+        help="Keyframe selection per scene (default: last)",
+    )
     parser.add_argument("--vlm-batch-size", type=int, default=8)
     parser.add_argument("--window-minutes", type=int, default=8)
     parser.add_argument("--refine-passes", type=int, default=2)
@@ -237,6 +257,15 @@ def main() -> None:
             )
         )
 
+    if args.papers:
+        steps_spec.append(
+            (
+                "00b Parse papers (docling)",
+                "00b_parse_papers.py",
+                ["--run-dir", rd, *[str(p.resolve()) for p in args.papers], *force_flag],
+            )
+        )
+
     steps_spec.extend(
         [
             (
@@ -257,15 +286,9 @@ def main() -> None:
             (
                 "04 Extract keyframes",
                 "04_extract_keyframes.py",
-                ["--run-dir", rd],
-            ),
-            (
-                "05 VLM caption slides",
-                "05_caption_slides.py",
                 [
                     "--run-dir", rd,
-                    "--batch-size", str(args.vlm_batch_size),
-                    *(["--force"] if args.force_all else []),
+                    "--strategy", args.keyframe_strategy,
                 ],
             ),
             (
@@ -274,16 +297,11 @@ def main() -> None:
                 ["--run-dir", rd],
             ),
             (
-                "07 Merge checkpoint",
-                "07_merge.py",
-                ["--run-dir", rd],
-            ),
-            (
-                "09 Generate report",
-                "09_generate_report.py",
+                "05+09 VLM caption + report (single load)",
+                "05_09_vlm_runner.py",
                 [
                     "--run-dir", rd,
-                    "--force-outline",
+                    "--vlm-batch-size", str(args.vlm_batch_size),
                     "--max-model-len", str(report_max_model_len),
                     "--window-minutes", str(args.window_minutes),
                     "--section-tokens", "6000",
@@ -292,6 +310,9 @@ def main() -> None:
                     "--verify-passes", str(args.verify_passes),
                     "--verify-tokens", "4096",
                     "--gpu-mem", str(report_gpu_mem),
+                    *(["--force-caption"] if args.force_all else []),
+                    "--force-outline",
+                    *(["--force-topics"] if args.force_all else []),
                 ],
             ),
             *(

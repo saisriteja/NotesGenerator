@@ -116,6 +116,16 @@
               <td>off</td>
               <td>Re-run all cached pipeline steps</td>
             </tr>
+            <tr>
+              <td><code>--papers PATH …</code></td>
+              <td>—</td>
+              <td>Research PDFs parsed with docling before transcription (<code>NotesGenerator[papers]</code>)</td>
+            </tr>
+            <tr>
+              <td><code>--keyframe-strategy</code></td>
+              <td><code>last</code></td>
+              <td>Keyframe per scene: <code>last</code> (default, better for animated slides) or <code>midpoint</code></td>
+            </tr>
           </tbody>
         </table>
       </div>
@@ -177,6 +187,13 @@
       <p>At startup you will see a line like:</p>
       <pre><code>GPU 'Tesla T4' (14.6 GiB, CC 7.5) → report step uses max_model_len=8192</code></pre>
 
+      <h3>Shared GPUs</h3>
+      <p>
+        When other processes already occupy VRAM, the pipeline auto-clamps <code>gpu_mem</code> to fit free memory
+        (e.g. <code>0.82 → 0.70</code>). On an empty GPU, Colab defaults are unchanged. If free VRAM is below ~12 GiB,
+        the pipeline exits with a clear message — use a freer GPU (<code>CUDA_VISIBLE_DEVICES=1</code>) or stop competing jobs.
+      </p>
+
       <h2 id="cheatsheet">Configuration cheat sheet</h2>
 
       <span class="code-label">Whisper size</span>
@@ -193,6 +210,14 @@
 
       <span class="code-label">Force re-run</span>
       <pre><code>notesgenerator --video lecture.mp4 --output run1 --force-all</code></pre>
+
+      <span class="code-label">Research paper grounding</span>
+      <pre><code>pip install "NotesGenerator[gpu,papers]"
+notesgenerator --video lecture.mp4 --output run1 \
+  --papers readings/paper1.pdf readings/paper2.pdf</code></pre>
+
+      <span class="code-label">Keyframe strategy</span>
+      <pre><code>notesgenerator --video lecture.mp4 --output run1 --keyframe-strategy last</code></pre>
 
       <span class="code-label">Custom Qwen model</span>
       <pre><code>QWEN_MODEL=Qwen/Qwen3-VL-8B-Instruct notesgenerator --video lecture.mp4 --output run1</code></pre>

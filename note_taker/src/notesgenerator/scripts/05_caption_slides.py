@@ -7,7 +7,7 @@ import argparse
 from pathlib import Path
 
 from common import add_run_dir_arg, load_json, save_json
-from qwen_vllm import VllmConfig, image_messages, qwen_vllm_session
+from qwen_vllm import QwenVllmEngine, VllmConfig, image_messages, qwen_vllm_session
 
 CAPTION_PROMPT = (
     "This is a slide from an AI/math lecture. Transcribe any equations (LaTeX), "
@@ -23,6 +23,7 @@ def caption_slides(
     max_new_tokens: int,
     batch_size: int,
     force: bool,
+    engine: QwenVllmEngine | None = None,
 ) -> None:
     if output_path.exists() and not force:
         print(f"Captions already exist: {output_path}")
@@ -41,7 +42,7 @@ def caption_slides(
     config = VllmConfig(model=model, max_new_tokens=max_new_tokens)
     captions: list[dict] = []
 
-    with qwen_vllm_session(config) as engine:
+    def run_captions(active_engine: QwenVllmEngine) -> None:
         for start in range(0, len(work), batch_size):
             batch = work[start : start + batch_size]
             end = min(start + batch_size, len(work))
@@ -51,12 +52,18 @@ def caption_slides(
                 image_messages(f"file://{path.resolve()}", CAPTION_PROMPT)
                 for _, path in batch
             ]
-            texts = engine.generate_batch(messages_list)
+            texts = active_engine.generate_batch(messages_list)
 
             for (scene_id, _), text in zip(batch, texts):
                 captions.append({"scene_id": scene_id, "vlm_description": text})
 
             save_json(output_path, captions)
+
+    if engine is not None:
+        run_captions(engine)
+    else:
+        with qwen_vllm_session(config) as active_engine:
+            run_captions(active_engine)
 
     save_json(output_path, captions)
     print(f"Wrote {len(captions)} captions -> {output_path}")

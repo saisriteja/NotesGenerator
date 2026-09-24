@@ -13,17 +13,25 @@ def align_segments(scenes: list[dict], segments: list[dict]) -> list[dict]:
     aligned = []
     for scene in scenes:
         start, end = scene["start"], scene["end"]
-        texts = [
-            seg["text"]
+        matched = [
+            {
+                "start": seg["start"],
+                "end": seg["end"],
+                "text": seg["text"].strip(),
+            }
             for seg in segments
-            if start <= seg["start"] < end and seg["text"]
+            if seg.get("text")
+            and seg["start"] < end
+            and seg["end"] > start
         ]
+        matched.sort(key=lambda row: row["start"])
         aligned.append(
             {
                 "scene_id": scene["scene_id"],
                 "start": scene["start"],
                 "end": scene["end"],
-                "transcript": " ".join(texts).strip(),
+                "transcript": " ".join(row["text"] for row in matched).strip(),
+                "segments": matched,
             }
         )
     return aligned
