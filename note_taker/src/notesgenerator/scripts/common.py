@@ -88,13 +88,28 @@ def nvenc_available() -> bool:
     """True when ffmpeg can encode H.264 with NVENC (Colab T4, etc.)."""
     global _NVENC_AVAILABLE
     if _NVENC_AVAILABLE is None:
-        result = subprocess.run(
-            ["ffmpeg", "-hide_banner", "-encoders"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        _NVENC_AVAILABLE = "h264_nvenc" in (result.stdout + result.stderr)
+        if os.environ.get("NOTE_TAKER_DISABLE_NVENC") == "1":
+            _NVENC_AVAILABLE = False
+        else:
+            probe = subprocess.run(
+                [
+                    "ffmpeg",
+                    "-hide_banner",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "nullsrc=s=256x256:d=0.1",
+                    "-c:v",
+                    "h264_nvenc",
+                    "-f",
+                    "null",
+                    "-",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            _NVENC_AVAILABLE = probe.returncode == 0
     return _NVENC_AVAILABLE
 
 
@@ -121,22 +136,89 @@ def media_duration_sec(path: Path) -> float | None:
         return None
 
 
-def h264_encoder_args() -> list[str]:
+def h264_encoder_args(*, fast: bool = True) -> list[str]:
     """Encoder flags for pipeline-compatible H.264 output."""
     if nvenc_available():
-        return ["-c:v", "h264_nvenc", "-preset", "p4", "-rc", "vbr", "-cq", "23"]
-    return ["-c:v", "libx264", "-preset", "fast", "-crf", "23"]
+        if fast:
+            return [
+                "-c:v",
+                "h264_nvenc",
+                "-preset",
+                "p1",
+                "-tune",
+                "ll",
+                "-rc",
+                "vbr",
+                "-cq",
+                "28",
+                "-pix_fmt",
+                "yuv420p",
+            ]
+        return [
+            "-c:v",
+            "h264_nvenc",
+            "-preset",
+            "p4",
+            "-rc",
+            "vbr",
+            "-cq",
+            "23",
+            "-pix_fmt",
+            "yuv420p",
+        ]
+    if fast:
+        return [
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-tune",
+            "fastdecode",
+            "-crf",
+            "28",
+            "-threads",
+            "0",
+            "-pix_fmt",
+            "yuv420p",
+        ]
+    return [
+        "-c:v",
+        "libx264",
+        "-preset",
+        "fast",
+        "-crf",
+        "23",
+        "-threads",
+        "0",
+        "-pix_fmt",
+        "yuv420p",
+    ]
 
 
-def transcode_wait_hint(src: Path, src_codec: str) -> str:
+def pipeline_video_filters(*, fast: bool = True) -> list[str]:
+    """Video filters tuned for slide/scene detection (not final viewing quality)."""
+    if not fast:
+        return []
+    # 15 fps + 720p-class width: much less work for AV1 decode/encode on long lectures.
+    return [
+        "-vf",
+        "fps=15,scale='min(1280,iw)':-2:flags=fast_bilinear",
+    ]
+
+
+def transcode_wait_hint(src: Path, src_codec: str, *, fast: bool = True) -> str:
     """Human-readable note before a long ffmpeg transcode."""
     duration = media_duration_sec(src)
     duration_txt = f" (~{int(duration // 60)} min)" if duration else ""
-    encoder = "GPU h264_nvenc" if nvenc_available() else "CPU libx264"
+    encoder = "GPU h264_nvenc (p1)" if nvenc_available() else "CPU libx264 (ultrafast)"
+    speed_note = (
+        "Fast prepare: 15 fps, max width 1280px."
+        if fast
+        else "Full-quality prepare (slower)."
+    )
     return (
         f"Transcoding {src_codec} -> h264{duration_txt} via {encoder}. "
-        "Long AV1/VP9 lectures can take many minutes on Colab; "
-        "progress lines appear below every ~5s."
+        f"{speed_note} Progress lines appear below every ~5s."
     )
 
 

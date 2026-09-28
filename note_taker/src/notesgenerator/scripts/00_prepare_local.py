@@ -8,9 +8,9 @@ audio-only .webm in the same folder, e.g. gpumode downloads).
 from __future__ import annotations
 
 import argparse
-import shutil
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from common import (
@@ -18,6 +18,7 @@ from common import (
     die,
     ensure_run_layout,
     h264_encoder_args,
+    pipeline_video_filters,
     resolve_media_inputs,
     run_ffmpeg,
     stream_codecs,
@@ -25,23 +26,29 @@ from common import (
 )
 
 
-def video_codec(path: Path) -> str:
-    return stream_codecs(path)["video"] or ""
+def remux_video_copy(src: Path, dst: Path) -> None:
+    """Fast remux — copy bitstreams without re-encoding."""
+    cmd = ["ffmpeg", "-y", "-i", str(src), "-c", "copy", str(dst)]
+    run_ffmpeg(
+        cmd,
+        hint=f"Remuxing {src.name} with stream copy (no re-encode; seconds, not minutes).",
+    )
 
 
-def transcode_to_h264(src: Path, dst: Path) -> None:
+def transcode_to_h264(src: Path, dst: Path, *, fast: bool = True) -> None:
     streams = stream_codecs(src)
     codec = streams["video"] or "unknown"
     cmd = [
-        "ffmpeg", "-y", "-i", str(src),
-        *h264_encoder_args(),
+        "ffmpeg", "-y", "-threads", "0", "-i", str(src),
+        *pipeline_video_filters(fast=fast),
+        *h264_encoder_args(fast=fast),
     ]
     if streams["audio"]:
         cmd.extend(["-c:a", "copy"])
     else:
         cmd.append("-an")
     cmd.append(str(dst))
-    run_ffmpeg(cmd, hint=transcode_wait_hint(src, codec))
+    run_ffmpeg(cmd, hint=transcode_wait_hint(src, codec, fast=fast))
 
 
 def extract_audio(src: Path, dst: Path) -> None:
@@ -58,6 +65,9 @@ def prepare(
     run_dir: Path,
     force: bool,
     audio_path: Path | None = None,
+    *,
+    transcode_h264: bool = False,
+    fast: bool = True,
 ) -> None:
     video_src, audio_src = resolve_media_inputs(video_path, audio_path)
 
@@ -67,24 +77,38 @@ def prepare(
     audio_out = raw / "audio.wav"
 
     if video_out.exists() and audio_out.exists() and not force:
-        codec = video_codec(video_out)
-        if codec == "h264":
-            print(f"Already prepared: {video_out}, {audio_out}")
-            return
-        print(f"Existing video is {codec}; re-transcoding to h264 (--force not required)")
+        print(f"Already prepared: {video_out}, {audio_out}")
+        return
 
-    codec = video_codec(video_src)
-    if codec == "h264":
-        print(f"Copying {video_src} -> {video_out}")
-        shutil.copy2(video_src, video_out)
+    need_audio = not audio_out.exists() or force
+    src_streams = stream_codecs(video_src)
+    src_codec = src_streams["video"] or "unknown"
+
+    def write_video() -> None:
+        if transcode_h264:
+            print(f"Transcoding {src_codec} -> h264: {video_src} -> {video_out}")
+            transcode_to_h264(video_src, video_out, fast=fast)
+        else:
+            print(f"Remuxing {src_codec} -> {video_out} (stream copy)")
+            remux_video_copy(video_src, video_out)
+
+    can_parallel_audio = need_audio and not audio_src and src_streams["audio"]
+    if can_parallel_audio:
+        print("Extracting audio in parallel with video remux ...", flush=True)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            video_future = pool.submit(write_video)
+            audio_future = pool.submit(extract_audio, video_src, audio_out)
+            video_future.result()
+            audio_future.result()
+        need_audio = False
     else:
-        print(f"Transcoding {codec} -> h264: {video_src} -> {video_out}")
-        transcode_to_h264(video_src, video_out)
+        write_video()
 
-    audio_input = audio_src or video_out
-    if audio_src:
-        print(f"Extracting audio from separate source: {audio_src}")
-    extract_audio(audio_input, audio_out)
+    if need_audio:
+        audio_input = audio_src or video_out
+        if audio_src:
+            print(f"Extracting audio from separate source: {audio_src}")
+        extract_audio(audio_input, audio_out)
 
     print(f"Ready: {video_out} ({video_out.stat().st_size // 1024 // 1024} MB)")
     print(f"Ready: {audio_out}")
@@ -105,8 +129,25 @@ def main() -> None:
     )
     add_run_dir_arg(parser)
     parser.add_argument("--force", action="store_true")
+    parser.add_argument(
+        "--transcode-h264",
+        action="store_true",
+        help="Re-encode to h264 (slow). Default is ffmpeg -c copy remux.",
+    )
+    parser.add_argument(
+        "--full-quality",
+        action="store_true",
+        help="With --transcode-h264: keep source fps/resolution (default is 15fps/1280px)",
+    )
     args = parser.parse_args()
-    prepare(args.video.resolve(), args.run_dir, args.force, args.audio)
+    prepare(
+        args.video.resolve(),
+        args.run_dir,
+        args.force,
+        args.audio,
+        transcode_h264=args.transcode_h264,
+        fast=not args.full_quality,
+    )
 
 
 if __name__ == "__main__":
