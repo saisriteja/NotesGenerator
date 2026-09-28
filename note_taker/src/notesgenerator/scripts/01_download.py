@@ -8,7 +8,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from common import default_run_dir, die, ensure_run_layout, extract_video_id
+from common import default_run_dir, die, ensure_run_layout, extract_video_id, run_ffmpeg
 
 
 def download(
@@ -68,8 +68,7 @@ def download(
         "1",
         str(audio_path),
     ]
-    print("Running:", " ".join(ffmpeg_cmd))
-    subprocess.run(ffmpeg_cmd, check=True, capture_output=True)
+    run_ffmpeg(ffmpeg_cmd)
     print(f"Saved {video_path} and {audio_path}")
 
 

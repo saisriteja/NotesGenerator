@@ -13,7 +13,16 @@ import subprocess
 import sys
 from pathlib import Path
 
-from common import add_run_dir_arg, die, ensure_run_layout, resolve_media_inputs, stream_codecs
+from common import (
+    add_run_dir_arg,
+    die,
+    ensure_run_layout,
+    h264_encoder_args,
+    resolve_media_inputs,
+    run_ffmpeg,
+    stream_codecs,
+    transcode_wait_hint,
+)
 
 
 def video_codec(path: Path) -> str:
@@ -22,17 +31,17 @@ def video_codec(path: Path) -> str:
 
 def transcode_to_h264(src: Path, dst: Path) -> None:
     streams = stream_codecs(src)
+    codec = streams["video"] or "unknown"
     cmd = [
         "ffmpeg", "-y", "-i", str(src),
-        "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+        *h264_encoder_args(),
     ]
     if streams["audio"]:
         cmd.extend(["-c:a", "copy"])
     else:
         cmd.append("-an")
     cmd.append(str(dst))
-    print("Running:", " ".join(cmd))
-    subprocess.run(cmd, check=True, capture_output=True)
+    run_ffmpeg(cmd, hint=transcode_wait_hint(src, codec))
 
 
 def extract_audio(src: Path, dst: Path) -> None:
@@ -41,8 +50,7 @@ def extract_audio(src: Path, dst: Path) -> None:
         "-vn", "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1",
         str(dst),
     ]
-    print("Running:", " ".join(cmd))
-    subprocess.run(cmd, check=True, capture_output=True)
+    run_ffmpeg(cmd)
 
 
 def prepare(

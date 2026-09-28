@@ -81,6 +81,82 @@ def die(message: str, code: int = 1) -> None:
     sys.exit(code)
 
 
+_NVENC_AVAILABLE: bool | None = None
+
+
+def nvenc_available() -> bool:
+    """True when ffmpeg can encode H.264 with NVENC (Colab T4, etc.)."""
+    global _NVENC_AVAILABLE
+    if _NVENC_AVAILABLE is None:
+        result = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-encoders"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        _NVENC_AVAILABLE = "h264_nvenc" in (result.stdout + result.stderr)
+    return _NVENC_AVAILABLE
+
+
+def media_duration_sec(path: Path) -> float | None:
+    """Return container duration in seconds, or None if ffprobe cannot read it."""
+    result = subprocess.run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            str(path),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    try:
+        return float(result.stdout.strip())
+    except ValueError:
+        return None
+
+
+def h264_encoder_args() -> list[str]:
+    """Encoder flags for pipeline-compatible H.264 output."""
+    if nvenc_available():
+        return ["-c:v", "h264_nvenc", "-preset", "p4", "-rc", "vbr", "-cq", "23"]
+    return ["-c:v", "libx264", "-preset", "fast", "-crf", "23"]
+
+
+def transcode_wait_hint(src: Path, src_codec: str) -> str:
+    """Human-readable note before a long ffmpeg transcode."""
+    duration = media_duration_sec(src)
+    duration_txt = f" (~{int(duration // 60)} min)" if duration else ""
+    encoder = "GPU h264_nvenc" if nvenc_available() else "CPU libx264"
+    return (
+        f"Transcoding {src_codec} -> h264{duration_txt} via {encoder}. "
+        "Long AV1/VP9 lectures can take many minutes on Colab; "
+        "progress lines appear below every ~5s."
+    )
+
+
+def run_ffmpeg(cmd: list[str], *, hint: str = "") -> None:
+    """Run ffmpeg with live stderr progress (notebook/Colab friendly)."""
+    if hint:
+        print(hint, flush=True)
+
+    full = list(cmd)
+    extras = ["-hide_banner", "-stats_period", "5"]
+    if full and full[0] == "ffmpeg":
+        insert_at = 2 if len(full) > 1 and full[1] == "-y" else 1
+        for offset, flag in enumerate(extras):
+            if flag not in full:
+                full.insert(insert_at + offset, flag)
+
+    print("Running:", " ".join(full), flush=True)
+    subprocess.run(full, check=True)
+
+
 def media_stem(path: Path) -> str:
     """Strip yt-dlp format suffix: ``Lecture_48.f137.mp4`` → ``Lecture_48``."""
     name = path.name
