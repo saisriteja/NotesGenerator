@@ -45,6 +45,7 @@ papers = ["docling>=2.0"]
 
 [project.scripts]
 notesgenerator = "notesgenerator.run_pipeline:main"
+notesgenerator-batch = "notesgenerator.batch_missing:main"
 
 [project.urls]
 Homepage = "https://github.com/saisritejakuppaEros/NotesGenerator"

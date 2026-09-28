@@ -194,3 +194,7 @@ Log of updates made while improving the pipeline per `todo_updates.md`.
 ## Deferred to P1+ (remaining)
 
 Multi-frame VLM dedup, citation extraction, research agents, Excalidraw, podcasts, audio learning.
+
+
+
+nohup ./lectures/run_missing_lectures.sh >> runs/_batch_logs/nohup.out 2>&1 &

@@ -12,6 +12,7 @@ from pathlib import Path
 
 from notesgenerator._paths import data_root, runs_dir, scripts_dir
 from notesgenerator.colab_env import configure_colab_env
+from notesgenerator.notes_layout import organize_output
 
 
 def _log(msg: str) -> None:
@@ -173,6 +174,11 @@ def main() -> None:
 
     if not args.no_zip:
         _zip_report(run_dir, args.output)
+        dest = organize_output(args.output)
+        if dest:
+            _log(f"Notes:    {dest}")
+        else:
+            _log("Notes:    (zip not found for organize step)")
 
     _log("=" * 60)
 

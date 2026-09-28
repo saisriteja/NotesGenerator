@@ -37,5 +37,9 @@ def runs_dir() -> Path:
     return data_root() / "runs"
 
 
+def notes_dir() -> Path:
+    return data_root() / "notes"
+
+
 def models_dir() -> Path:
     return data_root() / "models"
